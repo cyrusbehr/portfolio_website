@@ -4,10 +4,8 @@ module.exports = {
     'Cyrus Behroozi is a software engineer based in Los Angeles who specializes in high performance computer vision.',
   siteKeywords:
     'Cyrus Behroozi, Cyrus, Behroozi, cyrus.behr, cyrusbehr, software engineer, computer vision, machine learning, C++',
-  siteUrl: 'https://brittanychiang.com', //TODO Cyrus
+  siteUrl: 'https://cyrusbehr.com', //TODO Cyrus
   siteLanguage: 'en_US',
-  googleAnalyticsID: 'UA-45666519-2', // TODO Cyrus
-  googleVerification: 'DCl7VAf9tcz6eD9gb67NfkNnJ1PKRNcg8qQiwpbx9Lk',
   name: 'Cyrus Behroozi',
   location: 'Los Angeles, CA',
   email: 'cyrus.behr@gmail.com',
