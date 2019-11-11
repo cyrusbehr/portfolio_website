@@ -1,7 +1,7 @@
 module.exports = {
   siteTitle: 'Cyrus Behroozi | Software Engineer',
   siteDescription:
-    'Cyrus Behroozi is a software engineer based in Los Angeles, CA who specializes in high performance computer vision.',
+    'Cyrus Behroozi is a software engineer based in Los Angeles who specializes in high performance computer vision.',
   siteKeywords:
     'Cyrus Behroozi, Cyrus, Behroozi, cyrus.behr, cyrusbehr, software engineer, computer vision, machine learning, C++',
   siteUrl: 'https://brittanychiang.com', //TODO Cyrus
