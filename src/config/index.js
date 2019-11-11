@@ -22,18 +22,6 @@ module.exports = {
       name: 'Linkedin',
       url: 'https://www.linkedin.com/in/cyrus-behroozi/',
     },
-    {
-      name: 'Codepen',
-      url: '',
-    },
-    {
-      name: 'Instagram',
-      url: '',
-    },
-    {
-      name: 'Twitter',
-      url: '',
-    },
   ],
 
   navLinks: [

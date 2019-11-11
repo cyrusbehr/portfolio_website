@@ -6,8 +6,6 @@ import {
   IconCodepen,
   IconInstagram,
   IconTwitter,
-  IconStar,
-  IconFork,
 } from '@components/icons';
 import { socialMedia } from '@config';
 import styled from 'styled-components';

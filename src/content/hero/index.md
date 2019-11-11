@@ -1,9 +1,8 @@
 ---
 title: 'Hi, my name is'
 name: 'Cyrus Behroozi'
-subtitle: 'I am a software developer.'
+subtitle: 'I am a software engineer.'
 contactText: 'Get In Touch'
 ---
 
-I'm a software engineer based in Los Angeles, CA specializing in computer vision.
-I write high performance software written in C++
+I'm a software engineer based in Los Angeles, CA specializing in high-performance computer vision software written in C++.
