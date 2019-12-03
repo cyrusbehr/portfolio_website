@@ -1,7 +1,7 @@
 import React from 'react';
 import { graphql } from 'gatsby';
 import PropTypes from 'prop-types';
-import { Layout, Hero, About, Jobs, Featured, Projects, Contact } from '@components';
+import { Layout, Hero, About, Jobs, Featured, Blog, Projects, Contact } from '@components';
 import styled from 'styled-components';
 import { mixins, Main } from '@styles';
 
@@ -18,6 +18,7 @@ const IndexPage = ({ location, data }) => (
       <Jobs data={data.jobs.edges} />
       <Featured data={data.featured.edges} />
       <Projects data={data.projects.edges} />
+      <Blog data={data.blog.edges} />
       <Contact data={data.contact.edges} />
     </MainContainer>
   </Layout>
@@ -82,6 +83,30 @@ export const pageQuery = graphql`
     }
     featured: allMarkdownRemark(
       filter: { fileAbsolutePath: { regex: "/featured/" } }
+      sort: { fields: [frontmatter___date], order: DESC }
+    ) {
+      edges {
+        node {
+          frontmatter {
+            title
+            cover {
+              childImageSharp {
+                fluid(maxWidth: 700, quality: 90, traceSVG: { color: "#64ffda" }) {
+                  ...GatsbyImageSharpFluid_withWebp_tracedSVG
+                }
+              }
+            }
+            tech
+            github
+            external
+            show
+          }
+          html
+        }
+      }
+    }
+    blog: allMarkdownRemark(
+      filter: { fileAbsolutePath: { regex: "/blog/" } }
       sort: { fields: [frontmatter___date], order: DESC }
     ) {
       edges {
