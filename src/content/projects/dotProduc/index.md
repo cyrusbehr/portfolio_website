@@ -9,5 +9,5 @@ tech:
 
 show: 'true'
 ---
-Compare the speed of different dot product C++ implementations such as naive, optimized, Eigen, AVX, and AVX2 implementations. 
+Compare the speed of different dot product C++ implementations such as naive, optimized, Eigen, OpenCV, Quantized, AVX, and AVX2 implementations. 
 
