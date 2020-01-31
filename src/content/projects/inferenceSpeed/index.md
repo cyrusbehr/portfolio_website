@@ -2,7 +2,7 @@
 date: '2019-12-27'
 title: 'Deep Learning Inference Speed Benchmark'
 image: ''
-github: 'https://github.com/cyrusbehr/benchmarks/tree/master/inferenceSpeed'
+github: 'https://github.com/cyrusbehr/deeplearningInferenceBenchmarks'
 external: ''
 tech:
   - C++
