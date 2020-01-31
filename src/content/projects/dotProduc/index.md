@@ -2,7 +2,7 @@
 date: '2019-12-25'
 title: 'Dot Product Implementation Speed benchmarks'
 image: ''
-github: 'https://github.com/cyrusbehr/benchmarks/tree/master/dotProduct'
+github: 'https://github.com/cyrusbehr/dotProductBenchmarks'
 external: ''
 tech:
   - C++
