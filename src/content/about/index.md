@@ -4,10 +4,9 @@ avatar: './me.jpg'
 skills:
   - C++
   - x86, ARM
+  - CUDA
   - Linux, macOS, Windows
   - Python
-  - Node.js
-  - React
 ---
 
 Hello! I'm Cyrus, a computer vision software developer based in Los Angeles. I studied mechatronics engineering at the [University of British Columbia](https://mech.ubc.ca/undergraduate/curriculum/program-options/mechatronics/).
