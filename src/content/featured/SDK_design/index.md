@@ -11,8 +11,6 @@ tech:
   - GCC
   - Pybind11
   - CircleCI
-  - Doxygen
-  - NCNN
 
 show: 'true'
 ---
