@@ -7,8 +7,7 @@ range: 'June 2019 - Present'
 url: 'https://www.trueface.ai/'
 ---
 
-- Build and maintain C++ SDK for facial recognition, object detection, threat, liveness, age prediction, and others.
-- Package and distribute SDK and external libraries as dependency free static library.
-- Support CPU and GPU deployment for linux and macOS for x86 and ARM
-- Run benchmarks to evaluate machine learning libraries and time-critical implementations for performance.
+- Build and maintain dependency-free cross platform C++ computer vision SDK.
+- Support CPU and GPU deployment for linux, macOS, Windows, Android, iOS, for x86, AArch32, AArch64
+- Leading the embedded thermal solution capable of running automated inner canthus temperature detection onboard CV22-based thermal camera. 
 - Work alongside machine learning team to evaluate and improve models.
