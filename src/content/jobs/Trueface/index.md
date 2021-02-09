@@ -1,6 +1,6 @@
 ---
 date: '2019-06-1'
-title: 'Lead C++ Computer Vision Engineer'
+title: 'Senior C++ Computer Vision Engineer'
 company: 'Trueface'
 location: 'Venice, CA'
 range: 'June 2019 - Present'
