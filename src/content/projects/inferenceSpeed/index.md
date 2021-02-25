@@ -6,10 +6,7 @@ github: 'https://github.com/cyrusbehr/deeplearningInferenceBenchmarks'
 external: ''
 tech:
   - C++
-  - MXNET
-  - NCNN
 
 show: 'true'
 ---
-Run inference speed benchmark for popular C++ deep learning frameworks.
-Perform the test in single thread mode.
+Inference speed benchmarks for popular deep learning CPU frameworks.
