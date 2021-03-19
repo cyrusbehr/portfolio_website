@@ -8,7 +8,7 @@ module.exports = {
   siteLanguage: 'en_US',
   name: 'Cyrus Behroozi',
   location: 'Los Angeles, CA',
-  email: 'cyrus.behr@gmail.com',
+  email: '',
   github: 'https://github.com/cyrusbehr',
   twitterHandle: '',
   socialMedia: [
