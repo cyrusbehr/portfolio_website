@@ -1,13 +1,13 @@
 ---
 date: '2019-06-1'
-title: 'Senior C++ Computer Vision Engineer'
+title: 'Senior C++ Computer Vision Engineer | SDK Team Lead'
 company: 'Trueface'
 location: 'Venice, CA'
 range: 'June 2019 - Present'
 url: 'https://www.trueface.ai/'
 ---
 
-- Lead SDK development effort.
+- Lead SDK development team.
 - Build and maintain dependency-free cross platform C++ computer vision SDK.
 - Support CPU and GPU deployment for Linux, macOS, Windows, Android, iOS, for x86, AArch32, AArch64.
 - Lead embedded thermal solution for automated elevated body temperature detection. 
