@@ -15,5 +15,4 @@ tech:
 show: 'true'
 ---
 
-A platform for redirecting non-critical emergency room patients to nearby walk-in clinics for faster medical service.
-QuickER displays live wait times and commute times, and provides a portal for hospitals and walk-in clinics.
+Web software to facilitate non-critical patient transfer from emergency rooms to walk-in clinics. Winner of Hatching Health Medical Innovation event and RBC Bank Get Seeded event.
