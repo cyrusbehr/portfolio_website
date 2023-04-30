@@ -5,7 +5,7 @@ skills:
   - C++
   - Python
   - x86, ARM
-  - CUDA
+  - TensorRT, ONNX Runtime
   - Linux, macOS, Windows
 ---
 
