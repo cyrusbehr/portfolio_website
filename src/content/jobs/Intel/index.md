@@ -3,7 +3,7 @@ date: '2016-5-1'
 title: 'R&D Engineer Co-op'
 company: 'Intel'
 location: 'Vancouver, Canada'
-range: 'May - Dec 2018'
+range: 'May - Dec 2016'
 url: 'https://www.intel.com/content/www/us/en/homepage.html'
 ---
 
