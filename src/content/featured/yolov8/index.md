@@ -1,9 +1,9 @@
 ---
 date: '3'
-title: 'TensorRT C++ API Tutorial'
+title: 'YoloV8 TensorRT C++ Tutorial'
 cover: './demo.png'
-github: 'https://github.com/cyrusbehr/tensorrt-cpp-api'
-external: 'https://youtu.be/Z0n5aLmcRHQ'
+github: 'https://github.com/cyrusbehr/YOLOv8-TensorRT-CPP'
+external: 'https://github.com/cyrusbehr/YOLOv8-TensorRT-CPP'
 tech:
   - TensorRT
   - C++
@@ -14,4 +14,4 @@ tech:
 show: 'true'
 ---
 
-One of the best open-source tutorials on how to use the TensorRT C++ API for high-performance GPU machine learning inference. Includes video recording and presentation slides from live presentation at Venice Computer Vision Meetup. 
+A C++ tutorial implementation of YoloV8 object detection and semantic segmentation using TensorRT. 
