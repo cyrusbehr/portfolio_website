@@ -10,7 +10,7 @@ skills:
 ---
 
 Hello! I'm Cyrus, a computer vision software developer based in Los Angeles. I studied mechatronics engineering at the [University of British Columbia](https://mech.ubc.ca/undergraduate/curriculum/program-options/mechatronics/).
-I currently work as a senior C++ computer vision engineer at [Trueface](https://www.trueface.ai/) (a [Pangiam](https://pangiam.com/) company) where I lead the SDK team.
+I previously worked as a senior C++ computer vision engineer at [Trueface](https://www.trueface.ai/) (a [Pangiam](https://pangiam.com/) company) where I led the SDK team.
 
 Aside from coding and hacking, I play the djembe drums and love to travel - I've lived all across South America.
 
