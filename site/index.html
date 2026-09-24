@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cyrus Behroozi, Director of Engineering at Tern</title>
+<meta name="description" content="Cyrus Behroozi is Director of Engineering at Tern, where the team builds vehicle positioning that works when GPS does not.">
+<link rel="canonical" href="https://www.cyrusbehr.com/">
+<meta name="theme-color" content="#0b0c0c">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cyrus Behroozi">
+<meta property="og:title" content="Cyrus Behroozi, Director of Engineering at Tern">
+<meta property="og:description" content="Vehicle positioning that works when GPS does not.">
+<meta property="og:url" content="https://www.cyrusbehr.com/">
+<meta property="og:image" content="https://www.cyrusbehr.com/og.v1.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Cyrus Behroozi, Director of Engineering at Tern, over a contour map of west Austin">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/schibsted-grotesk-normal-400-800.v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/css/site.css">
+<script defer src="assets/js/terrain.js"></script>
+<script defer src="assets/js/localize.js"></script>
+<script defer src="assets/js/main.js"></script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Person", "name": "Cyrus Behroozi", "jobTitle": "Director of Engineering", "worksFor": {"@type": "Organization", "name": "Tern", "url": "https://tern.ai"}, "url": "https://www.cyrusbehr.com/", "address": {"@type": "PostalAddress", "addressLocality": "Austin", "addressRegion": "TX"}, "alumniOf": "University of British Columbia", "sameAs": ["https://www.linkedin.com/in/cyrus-behroozi/", "https://github.com/cyrusbehr"]}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="hero" id="top">
+  <canvas id="terrain" aria-hidden="true"></canvas>
+  <canvas id="terrain-ov" aria-hidden="true"></canvas>
+  <div class="hero-veil" aria-hidden="true"></div>
+  <nav class="nav wrap" aria-label="Primary">
+    <a class="brand" href="#top">Cyrus Behroozi</a>
+    <div class="nav-links"><a href="#work">Work</a><a href="#press">News</a><a href="#record">Record</a><a href="#contact">Contact</a></div>
+  </nav>
+  <div class="hero-copy wrap">
+    <p class="eyebrow">Director of Engineering, <a href="https://tern.ai" target="_blank" rel="noopener">Tern</a></p>
+    <h1>Cyrus Behroozi</h1>
+    <p class="lede">I lead engineering at Tern, where we build vehicle positioning that works when GPS does not.</p>
+  </div>
+  <div class="hero-foot wrap">
+    <span class="readout" id="readout" aria-hidden="true">West Austin, contoured live from USGS elevation data</span>
+  </div>
+</header>
+
+<main id="main">
+  <section class="intro wrap" aria-label="About">
+    <div class="intro-text">
+      <p>I joined Tern in 2024 as a founding engineer. Today I lead engineering across the whole system: the positioning engine, the field app crews use, and the hardware inside the vehicle.</p>
+      <p>Before Tern I led the SDK team at Trueface, where our face recognition ranked #1 in the world for speed in NIST testing.</p>
+    </div>
+    <picture class="portrait">
+      <source type="image/webp" srcset="assets/img/portrait-400.v1.webp 400w, assets/img/portrait-480.v1.webp 480w, assets/img/portrait.v1.webp 640w" sizes="(max-width: 900px) 260px, 300px">
+      <img src="assets/img/portrait.v1.jpg" srcset="assets/img/portrait-400.v1.jpg 400w, assets/img/portrait-480.v1.jpg 480w, assets/img/portrait.v1.jpg 640w" sizes="(max-width: 900px) 260px, 300px" alt="Portrait of Cyrus Behroozi" width="640" height="800" loading="lazy" decoding="async">
+    </picture>
+    <dl class="stats">
+      <div><dt>U.S. Army contract, 2026</dt><dd>$11.26M</dd></div>
+      <div><dt>GitHub stars on my open source</dt><dd>1,600+</dd></div>
+      <div><dt>NIST FRVT speed rank, Trueface</dt><dd>#1</dd></div>
+    </dl>
+  </section>
+
+  <section class="work" id="work">
+    <div class="wrap">
+      <header class="sec-head"><span class="sec-n">01</span><h2>Positioning without GPS</h2></header>
+      <div class="work-lede">
+        <p>Tern works out where a vehicle is from its own onboard sensors, on road and off. No satellites, no cell signal, no outside infrastructure, so it keeps working where GPS is jammed, spoofed, or simply gone.</p>
+      </div>
+    </div>
+    <figure class="exhibit">
+      <div class="exhibit-frame" id="pf" tabindex="0" role="img" aria-label="Live demo: a particle filter works out where a car is on a city map using only the car's motion. Click, or press Enter, to move the car and watch it search again."></div>
+      <figcaption class="exhibit-cap">
+        <span class="status" aria-hidden="true"><i id="pf-dot"></i><b id="pf-state">Searching</b><span id="pf-detail"></span></span>
+        <span class="hint">Click the map to move the car.</span>
+      </figcaption>
+      <span class="sr-only" id="pf-live" aria-live="polite"></span>
+      <p class="exhibit-note">A textbook illustration: a particle filter matching a car's motion to a road map. Tern's system is different, and works off road too.</p>
+    </figure>
+    <div class="wrap">
+      <div class="stack">
+        <div><h3>Positioning engine</h3><p>Works out where a vehicle is from its own onboard sensors, on road or off, with no satellites, no cell signal, and no outside infrastructure.</p></div>
+        <div><h3>Field app</h3><p>Turn-by-turn navigation, mission planning, and TAK integration for crews, running fully offline on phones and rugged tablets.</p></div>
+        <div><h3>Vehicle interface</h3><p>Plug-and-play hardware that connects to the vehicle and streams what the engine needs, updated over the air.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="press wrap" id="press">
+    <header class="sec-head"><span class="sec-n">02</span><h2>In the news</h2></header>
+    <a class="feature" href="https://techcrunch.com/2026/09/10/us-army-places-11m-bet-on-austin-based-gps-alternative-tern/" target="_blank" rel="noopener">
+      <span class="src">TechCrunch, Sep 10, 2026</span>
+      <span class="h">US Army places $11M bet on Austin-based GPS alternative Tern</span>
+      <span class="go">Read the story &rarr;</span>
+      <span class="blurb">An $11.26M Phase III SBIR to deploy Tern positioning and vehicle readiness across Army vehicles, less than a year after we won xTechOverwatch.</span>
+    </a>
+    <ul class="press-list">
+      <li><a href="https://www.businessinsider.com/us-army-betting-on-ai-navigation-vehicles-when-gps-jammed-2026-9" target="_blank" rel="noopener"><span>Business Insider, Sep 2026</span><span>The US Army is betting on new AI navigation for its vehicles when GPS is jammed</span></a></li>
+      <li><a href="https://thedefensepost.com/2026/09/15/us-gps-independent-navigation/" target="_blank" rel="noopener"><span>The Defense Post, Sep 2026</span><span>US Army Taps TERN for $11.3M GPS-Independent Navigation System</span></a></li>
+    </ul>
+    <div class="recog">
+      <a href="https://time.com/collections/best-inventions-special-mentions/7320826/tern-independently-derived-positioning-system-idps/" target="_blank" rel="noopener"><b>TIME Best Inventions 2025</b><span>Special Mention</span></a>
+      <a href="https://www.ces.tech/ces-innovation-awards/2025/idps-independently-derived-positioning-system/" target="_blank" rel="noopener"><b>CES 2025 Innovation Awards</b><span>Honoree, Vehicle Tech</span></a>
+      <a href="https://www.tern.ai/tern-named-winner-in-xtechoverwatch-competition/" target="_blank" rel="noopener"><b>xTechOverwatch</b><span>Winner, from 600+ applicants</span></a>
+      <a href="https://www.tern.ai/nato-diana-tern-selected-defense-navigation/" target="_blank" rel="noopener"><b>NATO DIANA 2026</b><span>1 of 150 selected from 3,680</span></a>
+    </div>
+  </section>
+
+  <section class="record wrap" id="record">
+    <header class="sec-head"><span class="sec-n">03</span><h2>Record</h2></header>
+    <div class="record-grid">
+      <div>
+        <h3 class="col-h">Experience</h3>
+        <ol class="xp">
+          <li class="now"><span class="yr">2026 to now</span><div class="role">Director of Engineering</div><div class="co">Tern</div><div class="note">Leads Core Positioning, Product Platform, and Hardware.</div></li>
+          <li><span class="yr">2024 to 2026</span><div class="role">Founding Engineer</div><div class="co">Tern</div><div class="note">Built the field app and helped build the positioning engine.</div></li>
+          <li><span class="yr">2019 to 2024</span><div class="role">Senior C++ Computer Vision Engineer, SDK Team Lead</div><div class="co">Trueface, a Pangiam company</div><div class="note">#1 in the world for speed in NIST FRVT. Face recognition used by DHS, airlines, and airports.</div></li>
+        </ol>
+        <p class="edu">B.A.Sc. Mechatronics Engineering, University of British Columbia</p>
+      </div>
+      <div>
+        <h3 class="col-h">Open source</h3>
+        <ul class="oss">
+          <li><a href="https://github.com/cyrusbehr/tensorrt-cpp-api" target="_blank" rel="noopener"><span class="t">tensorrt-cpp-api<small>814 stars</small></span><span class="d">The go-to open source guide to the TensorRT C++ API for GPU inference.</span></a></li>
+          <li><a href="https://github.com/cyrusbehr/YOLOv8-TensorRT-CPP" target="_blank" rel="noopener"><span class="t">YOLOv8-TensorRT-CPP<small>738 stars</small></span><span class="d">YOLOv8 detection and segmentation in C++ with TensorRT.</span></a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="contact wrap" id="contact">
+  <h2 class="contact-h">Get in touch.</h2>
+  <div class="contact-row">
+    <nav class="contact-links" aria-label="Contact">
+      <a href="https://www.linkedin.com/in/cyrus-behroozi/" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="https://github.com/cyrusbehr" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+  <div class="colophon">
+    <span>Terrain: USGS 3DEP and SRTM elevation via AWS Terrain Tiles, contoured live in your browser. Roads: &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.</span>
+    <span>&copy; <span id="year">2026</span> Cyrus Behroozi</span>
+  </div>
+</footer>
+</body>
+</html>

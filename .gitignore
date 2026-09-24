@@ -1,12 +1,7 @@
-# Project dependencies
-.cache
-node_modules
-yarn-error.log
-package-lock.json
-
-# Build directory
-/public
 .DS_Store
-
 .vscode/
-.idea
+.idea/
+__pycache__/
+*.pyc
+# Local Netlify CLI state
+.netlify/
