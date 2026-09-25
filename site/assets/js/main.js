@@ -11,6 +11,7 @@ $('year').textContent = String(new Date().getFullYear());
 const readout = $('readout');
 const REST = matchMedia('(max-width: 700px)').matches ? 'West Austin, from USGS elevation data' : readout.textContent;
 readout.textContent = REST;
+let lastReadout = REST;
 const deg = (v, pos, neg) => `${Math.abs(v).toFixed(4)}° ${v >= 0 ? pos : neg}`;
 const terrain = window.Terrain.init({
   hero: $('top'), canvas: $('terrain'), overlay: $('terrain-ov'),
@@ -20,33 +21,44 @@ const terrain = window.Terrain.init({
     { name: 'Lady Bird Lake', x: 1222, y: 912, rot: 47, water: true },
   ],
   onProbe: p => {
+    const m = p ? `${Math.round(p.m)} m` : '', rest = p ? ` (${Math.round(p.m * 3.28084).toLocaleString()} ft)${p.water ? ', water' : ''}\u2003${deg(p.lat, 'N', 'S')}, ${deg(p.lon, 'E', 'W')}` : REST;
+    if (m + rest === lastReadout) return;            // only touch the DOM when the reading changes
+    lastReadout = m + rest;
     if (!p) { readout.textContent = REST; return; }
-    const ft = Math.round(p.m * 3.28084).toLocaleString();
-    readout.replaceChildren();
-    const b = document.createElement('b'); b.textContent = `${Math.round(p.m)} m`;
-    readout.append(b, ` (${ft} ft)${p.water ? ', water' : ''}\u2003${deg(p.lat, 'N', 'S')}, ${deg(p.lon, 'E', 'W')}`);
+    const b = document.createElement('b'); b.textContent = m;
+    readout.replaceChildren(b, rest);
   },
 });
 
 /* Exhibit: particle filter. Status line under the map, plus a polite announcement on state changes. */
 const frame = $('pf'), dot = $('pf-dot'), st = $('pf-state'), det = $('pf-detail'), live = $('pf-live');
-let lastLabel = '';
+if (matchMedia('(pointer: coarse)').matches) $('pf-hint').textContent = 'Tap the map to move the car.';
+let lastLabel = '', lastEventN = -1;
+// Announce each event (search started, car moved, car located). Clearing first makes a repeated message speak again.
+const announce = msg => { live.textContent = ''; setTimeout(() => { live.textContent = msg; }, 60); };
+const spoken = e => {
+  const lock = /^Locked in ([\d.]+) s/.exec(e);
+  if (lock) return `Car located in ${lock[1]} seconds.`;
+  if (/moved the car/i.test(e)) return 'Car moved. Searching again.';
+  if (/lock lost/i.test(e)) return 'Lock lost. Searching again.';
+  return 'Searching for the car.';
+};
 const pf = window.Localize.create(frame, {
   onStatus: s => {
     const locked = s.state === 'Locked';
     dot.className = locked ? 'lock' : '';
     const label = locked ? 'Locked' : s.state === 'Lost' ? 'Lost' : s.state === 'Converging' ? 'Converging' : 'Searching';
-    if (label !== lastLabel) {
-      st.textContent = label; lastLabel = label;
-      live.textContent = locked ? `Car located in ${s.lockT.toFixed(1)} seconds.` : label === 'Searching' ? 'Searching for the car.' : '';
-    }
+    if (label !== lastLabel) { st.textContent = label; lastLabel = label; }
+    if (s.eventN !== lastEventN) { lastEventN = s.eventN; announce(spoken(s.event)); }
     det.textContent = locked
       ? `in ${s.lockT.toFixed(1)} s, error ${s.err < 10 ? s.err.toFixed(1) : Math.round(s.err)} m, ${s.n.toLocaleString()} particles`
       : `${s.n.toLocaleString()} particles, ${s.searchT.toFixed(1)} s`;
   },
 });
-// Keyboard users move the car with Enter or Space.
-frame.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pf.dropRandom(); } });
+// Keyboard users move the car with Enter or Space (held keys do not repeat). Screen readers activate the
+// frame with a synthesized click on the frame itself; real pointer clicks land on the canvas inside it.
+frame.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); pf.dropRandom(); } });
+frame.addEventListener('click', e => { if (e.target === frame) pf.dropRandom(); });
 
 if (debug) { window.__terrain = terrain; window.__pf = pf; }
 })();

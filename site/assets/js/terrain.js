@@ -191,7 +191,8 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
 
   /* View */
   let vw = 0, vh = 0, dpr = 1, dprOv = 1, base = 1, fx0 = 1060, fy0 = 700, ready = false, fade = 0, lensA = 0, dprCap = 1.5, portrait = false;
-  const view = { x: 1060, y: 700, s: 1 };
+  const view = { x: 1060, y: 700, s: 1 };          // target view, updated every frame
+  const rv = { x: 1060, y: 700, s: 1 };            // view the map was last drawn with
   const mouse = { x: -1, y: -1, in: false }, par = { x: 0, y: 0 };
   function resize() {
     const r = hero.getBoundingClientRect(); vw = r.width; vh = r.height;
@@ -205,19 +206,23 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
     const B = loopBox, lw = B.x1 - B.x0 + 40, lh = B.y1 - B.y0 + 40, cx = (B.x0 + B.x1) / 2, cy = (B.y0 + B.y1) / 2;
     if (portrait) {
       base = Math.max(vw / 560, Math.min(vh * 0.5 / lh, vw * 0.88 / lw));
-      fx0 = cx; fy0 = cy + (0.5 - 0.29) * vh / base;
     } else {
       base = Math.min(Math.max(vw / 880, vh / 560), (vh - 190) / lh);
-      fx0 = cx - 0.27 * vw / base; fy0 = cy + 6 / base;
     }
+    // Never zoom out past the data (a very short or very wide window), and never let the scale reach zero.
+    base = Math.max(base, 0.05);
+    if (EW) base = Math.max(base, vw / (EW - 8), vh / (EH - 8));
+    if (portrait) { fx0 = cx; fy0 = cy + (0.5 - 0.29) * vh / base; } else { fx0 = cx - 0.27 * vw / base; fy0 = cy + 6 / base; }
     if (ready) draw(performance.now(), true);
   }
   function updateView(t) {
     const scrollP = Math.min(1, Math.max(0, scrollY / Math.max(1, vh)));
     const s = base * (1 + .12 * scrollP);
     const drift = reduce ? 0 : 1;
-    par.x += ((mouse.in ? mouse.x / vw - .5 : 0) - par.x) * .04;
-    par.y += ((mouse.in ? mouse.y / vh - .5 : 0) - par.y) * .04;
+    if (!reduce) {
+      par.x += ((mouse.in ? mouse.x / vw - .5 : 0) - par.x) * .04;
+      par.y += ((mouse.in ? mouse.y / vh - .5 : 0) - par.y) * .04;
+    }
     const x = fx0 + drift * (Math.sin(t * 6e-5) * 16 + Math.sin(t * 1.9e-5) * 10) - par.x * 12 + scrollP * 60;
     const y = fy0 + drift * Math.cos(t * 5e-5) * 10 - par.y * 9 + scrollP * 50;
     const hw = vw / (2 * s), hh = vh / (2 * s);
@@ -225,7 +230,7 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
     const slack = portrait ? 0.5 * vh / s : 0;
     view.x = Math.min(EW - hw, Math.max(hw, x)); view.y = Math.min(EH - hh + slack, Math.max(hh, y)); view.s = s;
   }
-  const sx = x => (x - view.x) * view.s + vw / 2, sy = y => (y - view.y) * view.s + vh / 2;
+  const sx = x => (x - rv.x) * rv.s + vw / 2, sy = y => (y - rv.y) * rv.s + vh / 2;
 
   /* Real roads (OpenStreetMap) and a closed loop along them, both in DEM pixel coordinates */
   const route = { x: null, y: null, cum: null, n: 0, len: 0 };
@@ -263,7 +268,7 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
     rctx.setTransform(1, 0, 0, 1, 0, 0); rctx.clearRect(0, 0, rcv.width, rcv.height);
     if (!roads.length) return;
     rctx.setTransform(dprOv, 0, 0, dprOv, 0, 0); rctx.globalAlpha = fade; rctx.lineCap = 'round'; rctx.lineJoin = 'round';
-    const hw = vw / (2 * view.s), hh = vh / (2 * view.s), X0 = view.x - hw, X1 = view.x + hw, Y0 = view.y - hh, Y1 = view.y + hh;
+    const hw = vw / (2 * rv.s), hh = vh / (2 * rv.s), X0 = rv.x - hw, X1 = rv.x + hw, Y0 = rv.y - hh, Y1 = rv.y + hh;
     for (let c = 1; c <= 3; c++) {
       rctx.beginPath();
       for (const r of roads) {
@@ -291,15 +296,20 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
   const glow = document.createElement('canvas'); glow.width = glow.height = 64;
   { const g = glow.getContext('2d'), rg = g.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, 'rgba(255,140,90,.32)'); rg.addColorStop(1, 'rgba(255,140,90,0)'); g.fillStyle = rg; g.fillRect(0, 0, 64, 64); }
   let heading = 0, headingInit = false;
+  const rrect = (c, x, y, w, h, r) => {
+    if (c.roundRect) { c.roundRect(x, y, w, h, r); return; }
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  };
   function drawCar(x, y, ang) {
     octx.drawImage(glow, x - 22, y - 22, 44, 44);
     octx.save(); octx.translate(x, y); octx.rotate(ang);
     octx.drawImage(beam, 7, -12, 46, 24);
-    octx.fillStyle = 'rgba(0,0,0,.55)'; octx.beginPath(); octx.roundRect(-7.6, -4, 16.2, 9, 3); octx.fill();
-    octx.fillStyle = '#efede8'; octx.beginPath(); octx.roundRect(-7.5, -3.9, 15, 7.8, 2.8); octx.fill();
+    octx.fillStyle = 'rgba(0,0,0,.55)'; octx.beginPath(); rrect(octx, -7.6, -4, 16.2, 9, 3); octx.fill();
+    octx.fillStyle = '#efede8'; octx.beginPath(); rrect(octx, -7.5, -3.9, 15, 7.8, 2.8); octx.fill();
     octx.fillStyle = '#26292a';
-    octx.beginPath(); octx.roundRect(1.4, -3, 2.9, 6, 1); octx.fill();       // windshield
-    octx.beginPath(); octx.roundRect(-5.6, -2.8, 1.8, 5.6, .8); octx.fill();  // rear window
+    octx.beginPath(); rrect(octx, 1.4, -3, 2.9, 6, 1); octx.fill();       // windshield
+    octx.beginPath(); rrect(octx, -5.6, -2.8, 1.8, 5.6, .8); octx.fill();  // rear window
     octx.restore();
   }
   const places = (labels || []).map(l => { if (l.lat == null) return { ...l }; const [x, y] = ll2px(l.lat, l.lon); return { ...l, x, y }; });
@@ -331,9 +341,10 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
       const d = reduce ? route.len * 0.3 : (t / 1000) * SPEED;
       // Trail: opacity follows a continuous curve along its length. Pieces are grouped only while the
       // 8-bit alpha is unchanged, and use flat caps so neighbouring pieces never overlap into a seam.
-      const step = 1.2 / view.s;                 // about 1.2 screen px per piece
+      const step = 1.2 / rv.s;                   // about 1.2 screen px per piece
       octx.lineWidth = 1.8; octx.lineCap = 'butt';
       let lvl = -1;
+      if (step > 0 && step < TRAIL) {
       routeAt(d - TRAIL, A);
       let lx = sx(A[0]), ly = sy(A[1]);
       for (let q = d - TRAIL + step; ; q += step) {
@@ -345,6 +356,7 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
         if (last) break;
       }
       if (lvl > 0) octx.stroke();
+      }
       octx.lineCap = 'round';
       routeAt(d, CAR); routeAt(d + 3, A); routeAt(d - 3, B);
       const target = Math.atan2(A[1] - B[1], A[0] - B[0]);
@@ -406,38 +418,49 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
   /* Probe */
   function probe() {
     if (!mouse.in || !elev) return null;
-    const x = view.x + (mouse.x - vw / 2) / view.s, y = view.y + (mouse.y - vh / 2) / view.s;
+    const x = rv.x + (mouse.x - vw / 2) / rv.s, y = rv.y + (mouse.y - vh / 2) / rv.s;
     if (x < 0 || y < 0 || x >= EW || y >= EH) return null;
     const [lat, lon] = px2ll(x, y);
     return { m: sampleElev(x, y), lat, lon, water: isWater(x, y) };
   }
 
   /* Frame */
-  let raf = 0, visible = true, lastGl = -1e9, lastOv = -1e9, lastProbe = 0, slow = 0, lastT = 0;
+  let raf = 0, visible = true, lastGl = -1e9, lastOv = -1e9, lastProbe = 0, slow = 0, lastT = 0, probeShown = false;
+  const drawn = { mx: -1, my: -1, lens: -1, fade: -1 };
   function draw(t, once) {
     updateView(t);
     lensA += ((mouse.in ? 1 : 0) - lensA) * (reduce ? 1 : .07);
     fade = reduce ? 1 : Math.min(1, fade + .02);
-    // The terrain moves slowly, so the GPU pass runs at about 30 fps; the overlay stays at 60.
-    if (once || t - lastGl > 30) {
+    // The terrain drifts slowly, so it is only redrawn (at up to 30 fps) once the view has moved half a device
+    // pixel or the cursor lens has changed. An idle hero costs a few redraws a second, not a full-screen pass per frame.
+    const moved = Math.max(Math.abs(view.x - rv.x), Math.abs(view.y - rv.y)) * view.s * dpr > 0.5 || Math.abs(view.s - rv.s) > rv.s * 1e-3;
+    const lensChanged = Math.abs(lensA - drawn.lens) > 0.004 || (lensA > 0.004 && (Math.abs(mouse.x - drawn.mx) > 0.5 || Math.abs(mouse.y - drawn.my) > 0.5));
+    if (once || ((moved || lensChanged || fade !== drawn.fade) && t - lastGl > 30)) {
       lastGl = t;
+      rv.x = view.x; rv.y = view.y; rv.s = view.s;
+      drawn.mx = mouse.x; drawn.my = mouse.y; drawn.lens = lensA; drawn.fade = fade;
       if (gl && !glLost) {
-        gl.uniform2f(U.uRes, cv.width, cv.height); gl.uniform3f(U.uView, view.x, view.y, view.s * dpr);
+        gl.uniform2f(U.uRes, cv.width, cv.height); gl.uniform3f(U.uView, rv.x, rv.y, rv.s * dpr);
         gl.uniform4f(U.uLens, mouse.x * dpr, (vh - mouse.y) * dpr, 170 * dpr, lensA);
         gl.uniform1f(U.uDpr, dpr); gl.uniform1f(U.uFade, fade);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       } else if (fbMap) {
-        const k = view.s * dpr / FBK;
+        const k = rv.s * dpr / FBK;
         fctx.setTransform(1, 0, 0, 1, 0, 0); fctx.fillStyle = '#0b0c0c'; fctx.fillRect(0, 0, cv.width, cv.height);
         fctx.globalAlpha = fade; fctx.imageSmoothingEnabled = true;
-        fctx.setTransform(k, 0, 0, k, (vw / 2 - view.x * view.s) * dpr, (vh / 2 - view.y * view.s) * dpr);
+        fctx.setTransform(k, 0, 0, k, (vw / 2 - rv.x * rv.s) * dpr, (vh / 2 - rv.y * rv.s) * dpr);
         fctx.drawImage(fbMap, 0, 0); fctx.globalAlpha = 1;
       }
       drawRoads();
       stats.frames++;
     }
-    if (once || t - lastOv > 14) { lastOv = t; drawOverlay(t); }   // overlay near 60 fps even on high refresh displays
-    if (onProbe && t - lastProbe > 80) { lastProbe = t; onProbe(probe()); }
+    // Full rate up to 90 Hz (about 60 fps above that); the CPU-only fallback paints the overlay at 30 fps.
+    if (once || t - lastOv > (gl ? 11 : 30)) { lastOv = t; drawOverlay(t); }
+    if (onProbe && t - lastProbe > 80) {
+      lastProbe = t;
+      const p = probe();
+      if (p || probeShown) { probeShown = !!p; onProbe(p); }            // no DOM writes while nothing changes
+    }
   }
   function loop(t) {
     if (lastT && dprCap > 1) { slow = t - lastT > 30 ? slow + 1 : Math.max(0, slow - 1); if (slow > 90) { dprCap = 1; resize(); } }
@@ -448,10 +471,14 @@ function init({ hero, canvas, overlay, onProbe, labels }) {
   function start() { if (ready && !raf && !reduce && visible && !document.hidden) { lastT = 0; raf = requestAnimationFrame(loop); } }
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; start(); }).observe(hero);
   document.addEventListener('visibilitychange', start);
-  const setPointer = e => { const r = hero.getBoundingClientRect(); mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top; mouse.in = true; if (reduce && ready) draw(performance.now(), true); };
+  const setPointer = e => { clearTimeout(tapTimer); const r = hero.getBoundingClientRect(); mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top; mouse.in = true; if (reduce && ready) draw(performance.now(), true); };
   hero.addEventListener('pointermove', setPointer);
   hero.addEventListener('pointerdown', setPointer);
-  hero.addEventListener('pointerleave', e => { if (e.pointerType !== 'mouse') return; mouse.in = false; if (onProbe) onProbe(null); if (reduce && ready) draw(performance.now(), true); });
+  const clearPointer = () => { mouse.in = false; if (reduce && ready) draw(performance.now(), true); };
+  let tapTimer = 0;
+  hero.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') clearPointer(); });
+  hero.addEventListener('pointercancel', clearPointer);
+  hero.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') { clearTimeout(tapTimer); tapTimer = setTimeout(clearPointer, 2500); } });
   addEventListener('resize', resize);
 
   async function load() {

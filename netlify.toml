@@ -4,6 +4,22 @@
   publish = "site"
   command = "echo 'Static site, no build step'"
 
+# The site was a Gatsby build until 2026, so the dashboard may still attach the Gatsby runtime plugin.
+[build.environment]
+  NETLIFY_SKIP_GATSBY_BUILD_PLUGIN = "true"
+
+# The old site linked a resume PDF from here; send those visitors to the experience section.
+[[redirects]]
+  from = "/cyrus_behroozi_resume.pdf"
+  to = "/#record"
+  status = 302
+
+# The retired service worker must never be cached, so returning browsers pick up the version that removes it.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
 [[headers]]
   for = "/*"
   [headers.values]

@@ -516,7 +516,8 @@ function create(container, opts = {}) {
 
   /* ---------- Interaction ---------- */
   let dropFx = null, lastEvent = '';
-  function event(msg) { lastEvent = msg; }
+  let eventN = 0;
+  function event(msg) { lastEvent = msg; eventN++; }
   function nearestRoad(x, y) {
     let best = -1, bd = 1e18, bt = 0;
     for (let j = 0; j < driveIdx.length; j++) {
@@ -527,10 +528,14 @@ function create(container, opts = {}) {
     return best < 0 ? null : { k: best, t: bt, d: Math.sqrt(bd) };
   }
   // Reduced motion shows a settled frame instead of animation; the steps run in chunks so the page never freezes.
+  // Time-sliced (about 8 ms per slice), and a newer drop or boot cancels a run that is still going.
+  let preTok = 0;
   async function prerun(n, gen) {
+    const tok = ++preTok;
+    let slice = performance.now();
     for (let i = 0; i < n; i++) {
       simStep(); if (stepCount % UPD === 0) smoothDisplay(true);
-      if (i % 120 === 119) { await yieldTask(); if (gen !== bootGen) return false; }
+      if (performance.now() - slice > 8) { await yieldTask(); if (gen !== bootGen || tok !== preTok) return false; slice = performance.now(); }
     }
     lockFx = -1; dropFx = null; return true;
   }
@@ -573,16 +578,21 @@ function create(container, opts = {}) {
     rg.addColorStop(0, 'rgba(255,236,214,.34)'); rg.addColorStop(1, 'rgba(255,236,214,0)');
     g.fillStyle = rg; g.beginPath(); g.moveTo(0, 18); g.lineTo(96, 0); g.lineTo(96, 48); g.lineTo(0, 30); g.closePath(); g.fill();
   }
+  const rrect = (c, x, y, w, h, r) => {
+    if (c.roundRect) { c.roundRect(x, y, w, h, r); return; }   // Safari before 16, Firefox before 112
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  };
   function drawCar(x, y, ang) {
     const u = 1 / ppm;   // sizes below are screen px, same as the hero
     fx.drawImage(glowS, x - 22 * u, y - 22 * u, 44 * u, 44 * u);
     fx.save(); fx.translate(x, y); fx.rotate(ang); fx.scale(u, u);
     fx.drawImage(beamS, 7, -12, 46, 24);
-    fx.fillStyle = 'rgba(0,0,0,.55)'; fx.beginPath(); fx.roundRect(-7.6, -4, 16.2, 9, 3); fx.fill();
-    fx.fillStyle = '#efede8'; fx.beginPath(); fx.roundRect(-7.5, -3.9, 15, 7.8, 2.8); fx.fill();
+    fx.fillStyle = 'rgba(0,0,0,.55)'; fx.beginPath(); rrect(fx, -7.6, -4, 16.2, 9, 3); fx.fill();
+    fx.fillStyle = '#efede8'; fx.beginPath(); rrect(fx, -7.5, -3.9, 15, 7.8, 2.8); fx.fill();
     fx.fillStyle = '#26292a';
-    fx.beginPath(); fx.roundRect(1.4, -3, 2.9, 6, 1); fx.fill();
-    fx.beginPath(); fx.roundRect(-5.6, -2.8, 1.8, 5.6, .8); fx.fill();
+    fx.beginPath(); rrect(fx, 1.4, -3, 2.9, 6, 1); fx.fill();
+    fx.beginPath(); rrect(fx, -5.6, -2.8, 1.8, 5.6, .8); fx.fill();
     fx.restore();
   }
   function strokeTrail(buf, rgb, maxA, w) {
@@ -630,7 +640,11 @@ function create(container, opts = {}) {
         const a = clamp(0.3 + m * 0.8, 0, 0.9), rad = (16 + 22 * Math.sqrt(m)) / ppm;
         fx.beginPath(); fx.arc(hyp.x[r], hyp.y[r], rad, 0, TAU);
         fx.strokeStyle = `rgba(255,160,120,${(a * 0.7).toFixed(2)})`; fx.lineWidth = 1 / ppm; fx.stroke();
-        fx.fillStyle = `rgba(255,210,190,${a.toFixed(2)})`; fx.fillText(`${Math.round(m * 100)}%`, hyp.x[r] + rad + 6 / ppm, hyp.y[r]);
+        fx.fillStyle = `rgba(255,210,190,${a.toFixed(2)})`;
+        // Keep the label inside the frame: flip it to the left of the ring near the right edge.
+        const lbl = `${Math.round(m * 100)}%`, lw = fx.measureText(lbl).width;
+        if (hyp.x[r] + rad + 6 / ppm + lw > W - 4 / ppm) { fx.textAlign = 'right'; fx.fillText(lbl, hyp.x[r] - rad - 6 / ppm, hyp.y[r]); fx.textAlign = 'left'; }
+        else fx.fillText(lbl, hyp.x[r] + rad + 6 / ppm, hyp.y[r]);
       }
     }
     strokeTrail(trT, '236,234,229', 0.42, 1.4);
@@ -665,7 +679,7 @@ function create(container, opts = {}) {
   }
   let reportT = 0;
   function report() {
-    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, hyp: hyp.n });
+    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, eventN, hyp: hyp.n });
   }
 
   /* ---------- Loop ---------- */
@@ -678,7 +692,7 @@ function create(container, opts = {}) {
     while (acc >= STEP && n < 3) { simStep(); acc -= STEP; n++; }
     if (n === 3) acc = 0;
     smoothDisplay(false);
-    if (t - lastDraw > 14) { lastDraw = t; render(t); }   // cap drawing near 60 fps on high refresh displays
+    if (t - lastDraw > 11) { lastDraw = t; render(t); }   // full rate up to 90 Hz, about 60 fps above that
     if (t - reportT > 150) { reportT = t; report(); }
   }
   function setRunning() {
@@ -692,7 +706,7 @@ function create(container, opts = {}) {
   cvFx.addEventListener('click', ev => { const [x, y] = local(ev); dropAt(x / ppm, y / ppm, false); });
   if (matchMedia('(pointer: fine)').matches) {
     cvFx.addEventListener('pointermove', ev => { if (!built) return; [hx, hy] = local(ev); hoverDirty = true; if (!running) render(performance.now()); });
-    cvFx.addEventListener('pointerleave', () => { hover = null; hoverDirty = false; });
+    cvFx.addEventListener('pointerleave', () => { hover = null; hoverDirty = false; if (built && !running) render(performance.now()); });
   }
 
   async function boot() {

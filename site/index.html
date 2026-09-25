@@ -26,7 +26,7 @@
 <script defer src="assets/js/localize.js"></script>
 <script defer src="assets/js/main.js"></script>
 <script type="application/ld+json">
-{"@context": "https://schema.org", "@type": "Person", "name": "Cyrus Behroozi", "jobTitle": "Director of Engineering", "worksFor": {"@type": "Organization", "name": "Tern", "url": "https://tern.ai"}, "url": "https://www.cyrusbehr.com/", "address": {"@type": "PostalAddress", "addressLocality": "Austin", "addressRegion": "TX"}, "alumniOf": "University of British Columbia", "sameAs": ["https://www.linkedin.com/in/cyrus-behroozi/", "https://github.com/cyrusbehr"]}
+{"@context": "https://schema.org", "@type": "Person", "name": "Cyrus Behroozi", "jobTitle": "Director of Engineering", "worksFor": {"@type": "Organization", "name": "Tern", "url": "https://www.tern.ai"}, "url": "https://www.cyrusbehr.com/", "address": {"@type": "PostalAddress", "addressLocality": "Austin", "addressRegion": "TX"}, "alumniOf": "University of British Columbia", "sameAs": ["https://www.linkedin.com/in/cyrus-behroozi/", "https://github.com/cyrusbehr"]}
 </script>
 </head>
 <body>
@@ -41,12 +41,13 @@
     <div class="nav-links"><a href="#work">Work</a><a href="#press">News</a><a href="#record">Record</a><a href="#contact">Contact</a></div>
   </nav>
   <div class="hero-copy wrap">
-    <p class="eyebrow">Director of Engineering, <a href="https://tern.ai" target="_blank" rel="noopener">Tern</a></p>
+    <p class="eyebrow">Director of Engineering, <a href="https://www.tern.ai" target="_blank" rel="noopener">Tern</a></p>
     <h1>Cyrus Behroozi</h1>
     <p class="lede">I lead engineering at Tern, where we build vehicle positioning that works when GPS does not.</p>
   </div>
   <div class="hero-foot wrap">
     <span class="readout" id="readout" aria-hidden="true">West Austin, contoured live from USGS elevation data</span>
+    <a class="attrib" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">Roads &copy; OpenStreetMap</a>
   </div>
 </header>
 
@@ -62,7 +63,7 @@
     </picture>
     <dl class="stats">
       <div><dt>U.S. Army contract, 2026</dt><dd>$11.26M</dd></div>
-      <div><dt>GitHub stars on my open source</dt><dd>1,600+</dd></div>
+      <div><dt>GitHub stars on my open-source projects</dt><dd>1,600+</dd></div>
       <div><dt>NIST FRVT speed rank, Trueface</dt><dd>#1</dd></div>
     </dl>
   </section>
@@ -75,19 +76,21 @@
       </div>
     </div>
     <figure class="exhibit">
-      <div class="exhibit-frame" id="pf" tabindex="0" role="img" aria-label="Live demo: a particle filter works out where a car is on a city map using only the car's motion. Click, or press Enter, to move the car and watch it search again."></div>
-      <figcaption class="exhibit-cap">
-        <span class="status" aria-hidden="true"><i id="pf-dot"></i><b id="pf-state">Searching</b><span id="pf-detail"></span></span>
-        <span class="hint">Click the map to move the car.</span>
+      <div class="exhibit-frame" id="pf" tabindex="0" role="button" aria-label="Move the car in the live particle-filter demo" aria-describedby="pf-note"></div>
+      <figcaption>
+        <div class="exhibit-cap">
+          <span class="status" aria-hidden="true"><i id="pf-dot"></i><b id="pf-state">Searching</b><span id="pf-detail"></span></span>
+          <span class="hint" id="pf-hint">Click the map to move the car.</span>
+        </div>
+        <p class="exhibit-note" id="pf-note">A textbook illustration: a particle filter works out where a car is from its motion and a road map alone. Tern's system is different, and works off road too.</p>
+        <span class="sr-only" id="pf-live" aria-live="polite"></span>
       </figcaption>
-      <span class="sr-only" id="pf-live" aria-live="polite"></span>
-      <p class="exhibit-note">A textbook illustration: a particle filter matching a car's motion to a road map. Tern's system is different, and works off road too.</p>
     </figure>
     <div class="wrap">
       <div class="stack">
         <div><h3>Positioning engine</h3><p>Works out where a vehicle is from its own onboard sensors, on road or off, with no satellites, no cell signal, and no outside infrastructure.</p></div>
-        <div><h3>Field app</h3><p>Turn-by-turn navigation, mission planning, and TAK integration for crews, running fully offline on phones and rugged tablets.</p></div>
-        <div><h3>Vehicle interface</h3><p>Plug-and-play hardware that connects to the vehicle and streams what the engine needs, updated over the air.</p></div>
+        <div><h3>Field app</h3><p>Turn-by-turn navigation, mission planning, and TAK integration for crews, running fully offline on phones and tablets.</p></div>
+        <div><h3>Vehicle interface</h3><p>Plug-and-play hardware that connects to the vehicle and streams what the engine needs.</p></div>
       </div>
     </div>
   </section>
@@ -98,11 +101,11 @@
       <span class="src">TechCrunch, Sep 10, 2026</span>
       <span class="h">US Army places $11M bet on Austin-based GPS alternative Tern</span>
       <span class="go">Read the story &rarr;</span>
-      <span class="blurb">An $11.26M Phase III SBIR to deploy Tern positioning and vehicle readiness across Army vehicles, less than a year after we won xTechOverwatch.</span>
+      <span class="blurb">An $11.26M Phase III SBIR to deploy Tern positioning and vehicle readiness in Army vehicles, less than a year after we won xTechOverwatch.</span>
     </a>
     <ul class="press-list">
-      <li><a href="https://www.businessinsider.com/us-army-betting-on-ai-navigation-vehicles-when-gps-jammed-2026-9" target="_blank" rel="noopener"><span>Business Insider, Sep 2026</span><span>The US Army is betting on new AI navigation for its vehicles when GPS is jammed</span></a></li>
-      <li><a href="https://thedefensepost.com/2026/09/15/us-gps-independent-navigation/" target="_blank" rel="noopener"><span>The Defense Post, Sep 2026</span><span>US Army Taps TERN for $11.3M GPS-Independent Navigation System</span></a></li>
+      <li><a href="https://www.businessinsider.com/us-army-betting-on-ai-navigation-vehicles-when-gps-jammed-2026-9" target="_blank" rel="noopener"><span>Business Insider, Sep 10, 2026</span><span>The US Army is betting on new AI navigation for its vehicles when GPS is jammed</span></a></li>
+      <li><a href="https://thedefensepost.com/2026/09/15/us-gps-independent-navigation/" target="_blank" rel="noopener"><span>The Defense Post, Sep 15, 2026</span><span>US Army Taps TERN for $11.3M GPS-Independent Navigation System</span></a></li>
     </ul>
     <div class="recog">
       <a href="https://time.com/collections/best-inventions-special-mentions/7320826/tern-independently-derived-positioning-system-idps/" target="_blank" rel="noopener"><b>TIME Best Inventions 2025</b><span>Special Mention</span></a>
@@ -118,7 +121,7 @@
       <div>
         <h3 class="col-h">Experience</h3>
         <ol class="xp">
-          <li class="now"><span class="yr">2026 to now</span><div class="role">Director of Engineering</div><div class="co">Tern</div><div class="note">Leads Core Positioning, Product Platform, and Hardware.</div></li>
+          <li class="now"><span class="yr">2026 to now</span><div class="role">Director of Engineering</div><div class="co">Tern</div><div class="note">Leads the positioning, app, and hardware teams.</div></li>
           <li><span class="yr">2024 to 2026</span><div class="role">Founding Engineer</div><div class="co">Tern</div><div class="note">Built the field app and helped build the positioning engine.</div></li>
           <li><span class="yr">2019 to 2024</span><div class="role">Senior C++ Computer Vision Engineer, SDK Team Lead</div><div class="co">Trueface, a Pangiam company</div><div class="note">#1 in the world for speed in NIST FRVT. Face recognition used by DHS, airlines, and airports.</div></li>
         </ol>
