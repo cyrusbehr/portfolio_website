@@ -425,6 +425,8 @@ function create(container, opts = {}) {
     for (let i = 0; i < N; i++) { samplePrior(px, py, pt, i); pw[i] = 1 / N; pl[i] = 0.5; }
     wSlow = wFast = 0; lhRatio = 1; lowCount = 0; seedT = simT; neff = N;
     lockedOnce = false; lockT = 0; lockRun = 0; state = 'Searching'; hyp.n = 0; est.ok = false; eOn = false;
+    // Rings of the old belief fade out and are never matched to the new search.
+    for (const g of rings) { g.seen = false; g.dead = true; }
   }
   function predict(md, mdth) {
     const sa = 0.002 + 0.06 * Math.abs(mdth);
@@ -736,11 +738,11 @@ function create(container, opts = {}) {
           // Follow this ring's own group: guesses near it that face its way. A cluster at an intersection also holds
           // guesses on the cross street; they must not pull the ring off its street.
           const [gx, gy, gh] = gPose(best.T), lp = localPose(gx, gy, gh);
-          if (lp) { if (m < 0.06) continue; best.seen = true; best.tm = m; setPose(best.G, lp[0], lp[1], lp[2]); if (!running) Object.assign(best.T, best.G); continue; }
+          if (lp) { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.G, lp[0], lp[1], lp[2]); if (!running) Object.assign(best.T, best.G); continue; }
           if (Math.abs(wrapPi(hd.th[r] - gh)) > 1.05) { best.dead = true; best = null; }   // a different group: fade out, start fresh
-          else { if (m < 0.06) continue; best.seen = true; best.tm = m; setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
+          else { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
         }
-        if (m < 0.12) continue;                        // hysteresis: a ring appears at 12% and leaves below 6%
+        if (m < 0.07) continue;                        // hysteresis: a ring appears at 7% and leaves below 4%
         const ng = { T: {}, G: {}, m, tm: m, a: 0, seen: true }; setPose(ng.T, hd.x[r], hd.y[r], hd.th[r]); setPose(ng.G, hd.x[r], hd.y[r], hd.th[r]); rings.push(ng);
       }
       // Rings that left before they were ever drawn (only possible without frames, as in the pre-run) are dropped here.
@@ -785,10 +787,11 @@ function create(container, opts = {}) {
     }
   }
 
-  let hover = null, hoverDirty = false, hx = 0, hy = 0, confR = 20, confA = 0, lastConfT = 0;
+  let hover = null, hoverDirty = false, hoverOn = false, hx = 0, hy = 0, confR = 20, confA = 0, lastConfT = 0;
   function render(now) {
     updateCam(now);
     if (camMoved || mapDirty) { drawMapView(); mapDirty = false; }
+    if (camMoved && hoverOn) hoverDirty = true;   // the map moves under a still cursor
     SU = 1 / (ppm * cam.z);
     // World metres to device px through the camera. In the overview this is exactly the old ppm * DPR scale.
     const k = ppm * DPR * cam.z, ex = DPR * vw / 2 - k * cam.cx, ey = DPR * vh / 2 - k * cam.cy;
@@ -873,8 +876,8 @@ function create(container, opts = {}) {
   const local = ev => { const r = cvFx.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
   cvFx.addEventListener('click', ev => { const [x, y] = local(ev), [wx, wy] = toWorld(x, y); dropAt(wx, wy, false); });
   if (matchMedia('(pointer: fine)').matches) {
-    cvFx.addEventListener('pointermove', ev => { if (!built) return; [hx, hy] = local(ev); hoverDirty = true; if (!running) render(performance.now()); });
-    cvFx.addEventListener('pointerleave', () => { hover = null; hoverDirty = false; if (built && !running) render(performance.now()); });
+    cvFx.addEventListener('pointermove', ev => { if (!built) return; [hx, hy] = local(ev); hoverOn = hoverDirty = true; if (!running) render(performance.now()); });
+    cvFx.addEventListener('pointerleave', () => { hover = null; hoverOn = hoverDirty = false; if (built && !running) render(performance.now()); });
   }
 
   async function boot() {
