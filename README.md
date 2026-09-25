@@ -3,7 +3,7 @@
 Personal site of Cyrus Behroozi, Director of Engineering at Tern. A single static page with no framework and no build step.
 
 - **Hero:** real west Austin terrain, contoured live on the GPU from USGS elevation data, with a car looping on real OpenStreetMap roads. The cursor reads the true elevation under it.
-- **Exhibit:** a live particle filter that works out where a car is using only its motion and the road map. Click the map to move the car and watch it search again.
+- **Exhibit:** a live particle filter that works out where a car is using only its motion and the road map. Once it locks on, the camera glides in and follows the car. Click the map to move the car and watch it search again.
 
 ## Layout
 
@@ -13,8 +13,8 @@ site/                     everything that ships (Netlify publishes this folder)
   404.html
   assets/css/site.css
   assets/js/terrain.js    hero: WebGL2 contour shader, CPU fallback, roads, looping car
-  assets/js/localize.js   exhibit: particle filter, procedural city, vehicle model
-  assets/js/main.js       wires the two together and drives the status text
+  assets/js/localize.js   exhibit: particle filter, procedural city, vehicle model, follow camera
+  assets/js/main.js       wires the two together and drives the confidence meter
   assets/data/            elevation (Terrarium-encoded lossless WebP) and roads (JSON)
   assets/fonts/           self-hosted Schibsted Grotesk and IBM Plex Mono (latin subsets)
   assets/img/             portrait
