@@ -36,14 +36,16 @@ Then open http://localhost:8000. Add `?debug` to expose `window.__terrain` and `
 
 - **Copy:** edit `site/index.html` directly.
 - **Cached assets:** files under `assets/data`, `assets/fonts`, `assets/img`, and `og.v1.jpg` are served with a one-year immutable cache. When you change one, bump the `.v1` in its file name and in every reference to it.
-- **Roads or the car's loop:** `python3 tools/build_roads.py` (needs network access to the Overpass API).
+- **Roads or the car's loop:** `python3 tools/build_roads.py --out site/assets/data/austin-roads.v2.json`, then point `ROADS.url` in `terrain.js` at the new file (needs network access to the Overpass API). Writing over the `.v1` file would leave visitors on the cached copy for a year.
 
 ## Deploy
 
-Netlify builds from `master`. `netlify.toml` sets the publish folder to `site/` and replaces the old Gatsby build command with a no-op, so a push to `master` deploys.
+Netlify builds from `master`. `netlify.toml` sets the publish folder to `site/`, replaces the old Gatsby build command with a no-op, and skips the Gatsby runtime plugin, so a push to `master` deploys. Pull requests get a Deploy Preview.
+
+`site/sw.js` is not a feature: it retires the service worker the old Gatsby site installed, so returning visitors are not stuck on cached pages. Keep it.
 
 ## Data and credits
 
-- Elevation: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (USGS 3DEP and SRTM), z13, cropped and stored in Terrarium encoding. The lowest bit of blue marks water.
+- Elevation: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (USGS 3DEP and SRTM), z13, cropped and stored in Terrarium encoding. The lowest bit of blue marks water, derived from the flat lake surfaces in the elevation data itself.
 - Roads: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL.
-- Fonts: Schibsted Grotesk and IBM Plex Mono, both SIL Open Font License.
+- Fonts: Schibsted Grotesk and IBM Plex Mono, both SIL Open Font License 1.1 (license texts in `site/assets/fonts/`).

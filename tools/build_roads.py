@@ -9,7 +9,10 @@ already-used segments penalised so the loop does not double back on itself.
 All coordinates are pixels of the DEM mosaic (z13 Web Mercator, top-left at tile TX0, TY0), the same
 space terrain.js uses. Roads are (c) OpenStreetMap contributors, ODbL.
 
-Usage: python3 tools/build_roads.py [--cache osm.json]
+Usage: python3 tools/build_roads.py [--cache osm.json] [--out path]
+
+The data file is served with a one-year immutable cache, so write a new version (for example
+--out site/assets/data/austin-roads.v2.json) and update ROADS.url in site/assets/js/terrain.js.
 """
 import argparse, heapq, json, math, os, urllib.parse, urllib.request
 
@@ -58,6 +61,7 @@ def simplify(pts, eps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cache', help='read or write the raw Overpass response here')
+    ap.add_argument('--out', default=OUT, help='output file (default: the current v1 file)')
     args = ap.parse_args()
     if args.cache and os.path.exists(args.cache):
         data = json.load(open(args.cache))
@@ -124,9 +128,9 @@ def main():
         roads.append([cls] + [round(c, 1) for p in simplify(P, 0.5) for c in p])
 
     out = {'source': 'OpenStreetMap contributors (ODbL)', 'route': [round(c, 2) for p in route for c in p], 'routeKm': round(km, 2), 'roads': roads}
-    with open(OUT, 'w') as f:
+    with open(args.out, 'w') as f:
         json.dump(out, f, separators=(',', ':'))
-    print(f'loop {km:.1f} km, {len(route)} route points, {len(roads)} roads -> {os.path.relpath(OUT)}')
+    print(f'loop {km:.1f} km, {len(route)} route points, {len(roads)} roads -> {os.path.relpath(args.out)}')
 
 
 if __name__ == '__main__':
