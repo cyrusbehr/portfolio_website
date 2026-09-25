@@ -257,19 +257,24 @@ function create(container, opts = {}) {
   }
 
   // The map is drawn once at up to the follow zoom's resolution and viewed through the camera. In the overview
-  // (zoom 1) it is painted straight onto the screen canvas instead, exactly as before.
+  // (zoom 1) it is painted straight onto the screen canvas instead, exactly as before. Reduced motion never zooms,
+  // so it skips the large copy.
   let mapHi = null, MS = 1, mapDirty = true;
   function drawStatic() {
-    const dw = W * ppm * DPR, dh = H * ppm * DPR;
-    MS = Math.max(1, Math.min(ZF, 4096 / dw, 4096 / dh, Math.sqrt(6e6 / (dw * dh))));   // at most 6 Mpx (about 24 MB)
-    mapHi = mapHi || document.createElement('canvas');
-    mapHi.width = Math.round(dw * MS); mapHi.height = Math.round(dh * MS);
-    paintMap(mapHi.getContext('2d', { alpha: false }), ppm * DPR * MS, mapHi.width, mapHi.height);
-    mapDirty = true;
+    if (!reduceMotion) {
+      const dw = W * ppm * DPR, dh = H * ppm * DPR;
+      MS = Math.max(1, Math.min(ZF, 4096 / dw, 4096 / dh, Math.sqrt(6e6 / (dw * dh))));   // at most 6 Mpx (about 24 MB)
+      mapHi = mapHi || document.createElement('canvas');
+      mapHi.width = Math.round(dw * MS); mapHi.height = Math.round(dh * MS);
+      paintMap(mapHi.getContext('2d', { alpha: false }), ppm * DPR * MS, mapHi.width, mapHi.height);
+    }
+    // Show the overview right away, so the map is up while a reduced-motion pre-run is still going.
+    paintMap(cvMap.getContext('2d', { alpha: false }), ppm * DPR, cvMap.width, cvMap.height);
+    mapDirty = false;
   }
   function drawMapView() {
     const g = cvMap.getContext('2d', { alpha: false });
-    if (cam.z === 1) { paintMap(g, ppm * DPR, cvMap.width, cvMap.height); return; }
+    if (cam.z === 1 || !mapHi) { paintMap(g, ppm * DPR, cvMap.width, cvMap.height); return; }
     g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#0e0f0f'; g.fillRect(0, 0, cvMap.width, cvMap.height);
     const k = ppm * DPR * MS, w = W / cam.z, h = H / cam.z;
     g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
@@ -660,7 +665,8 @@ function create(container, opts = {}) {
     const a = lo + sp(v - lo);
     return hi - sp(hi - a);
   }
-  function resetCam() { cs.z = cam.z = 1; cs.cx = cam.cx = W / 2; cs.cy = cam.cy = H / 2; camV.z = camV.x = camV.y = 0; camFollow = false; trans.t0 = -1e9; mapDirty = true; }
+  // Only called on boot, right after drawStatic has painted the overview, so the map needs no repaint here.
+  function resetCam() { cs.z = cam.z = 1; cs.cx = cam.cx = W / 2; cs.cy = cam.cy = H / 2; camV.z = camV.x = camV.y = 0; camFollow = false; trans.t0 = -1e9; }
   function updateCam(now) {
     const dt = lastCamT ? Math.min(0.1, Math.max(0.001, (now - lastCamT) / 1000)) : 1 / 60; lastCamT = now;
     const follow = lockedOnce && !reduceMotion;
@@ -730,7 +736,7 @@ function create(container, opts = {}) {
         if (!running) Object.assign(eT, eG);
       }
       for (const g of rings) g.seen = false;
-      if (state !== 'Locked') for (let r = 0; r < hyp.n; r++) {
+      if (state !== 'Locked' && tween0 < 0) for (let r = 0; r < hyp.n; r++) {
         const m = hyp.m[r];
         let best = null, bd = 70 * 70;
         for (const g of rings) { if (g.seen || g.dead) continue; const [x, y] = gPose(g.T); const d = (x - hd.x[r]) ** 2 + (y - hd.y[r]) ** 2; if (d < bd) { bd = d; best = g; } }
@@ -739,8 +745,12 @@ function create(container, opts = {}) {
           // guesses on the cross street; they must not pull the ring off its street.
           const [gx, gy, gh] = gPose(best.T), lp = localPose(gx, gy, gh);
           if (lp) { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.G, lp[0], lp[1], lp[2]); if (!running) Object.assign(best.T, best.G); continue; }
-          if (Math.abs(wrapPi(hd.th[r] - gh)) > 1.05) { best.dead = true; best = null; }   // a different group: fade out, start fresh
-          else { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
+          if (Math.abs(wrapPi(hd.th[r] - gh)) > 1.05) {
+            // The strongest heading flipped (the same street the other way, or the cross street). At the same spot
+            // the ring stays and turns; a different group elsewhere gets a fresh ring while this one fades out.
+            if (Math.hypot(hd.x[r] - gx, hd.y[r] - gy) < 20) { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.T, gx, gy, hd.th[r]); setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
+            best.dead = true; best = null;
+          } else { if (m < 0.04) continue; best.seen = true; best.tm = m; setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
         }
         if (m < 0.07) continue;                        // hysteresis: a ring appears at 7% and leaves below 4%
         const ng = { T: {}, G: {}, m, tm: m, a: 0, seen: true }; setPose(ng.T, hd.x[r], hd.y[r], hd.th[r]); setPose(ng.G, hd.x[r], hd.y[r], hd.th[r]); rings.push(ng);
@@ -780,6 +790,7 @@ function create(container, opts = {}) {
       fx.fillStyle = `rgba(255,210,190,${a.toFixed(3)})`;
       // Keep the label inside the view: to the right of the ring, flipped to the left near the right edge, and held
       // inside when neither side fits.
+      if (g.dead) continue;   // a retired ring fades out without its label, so labels never stack
       const lbl = `${Math.round(m * 100)}%`, lw = fx.measureText(lbl).width, gap = rad + 6 * SU;
       let lx = x + gap;
       if (lx + lw > xr) lx = x - gap - lw >= xl ? x - gap - lw : clamp(lx, xl, xr - lw);
