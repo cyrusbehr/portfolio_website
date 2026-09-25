@@ -1,6 +1,8 @@
 // Exhibit: a map-matching particle filter localizing a car with GPS denied.
 // It knows only the road map and noisy odometry (distance and heading change). Nothing is scripted.
 // Global search with an adaptive particle count, random injection until lock, and a sustained-lock rule.
+// While searching, each strong guess gets a ring with its share of probability; once the car is found, the camera
+// glides in and follows it, with a confidence ring around the estimate.
 (function () {
 'use strict';
 
@@ -64,6 +66,11 @@ function create(container, opts = {}) {
   let lastVisit = new Int32Array(1), visits = 0;
   const seq = new Int32Array(4096); let seqN = 0;
   const cw = new Float32Array(16);
+  // Where each hypothesis ring is drawn: the pose of its dominant heading.
+  const hd = { x: new Float32Array(3), y: new Float32Array(3), th: new Float32Array(3) }, hbins = new Float64Array(36);
+  // Dead reckoning from the same odometry the filter sees (a shape with no position). It carries the rings between
+  // filter updates.
+  let odX = 0, odY = 0, odTh = 0;
   function alloc(n) {
     if (n === NMAX) return;
     NMAX = n; N = n;
@@ -249,9 +256,27 @@ function create(container, opts = {}) {
     return true;
   }
 
+  // The map is drawn once at up to the follow zoom's resolution and viewed through the camera. In the overview
+  // (zoom 1) it is painted straight onto the screen canvas instead, exactly as before.
+  let mapHi = null, MS = 1, mapDirty = true;
   function drawStatic() {
-    const g = cvMap.getContext('2d', { alpha: false }), k = ppm * DPR;
+    const dw = W * ppm * DPR, dh = H * ppm * DPR;
+    MS = Math.max(1, Math.min(ZF, 4096 / dw, 4096 / dh, Math.sqrt(6e6 / (dw * dh))));   // at most 6 Mpx (about 24 MB)
+    mapHi = mapHi || document.createElement('canvas');
+    mapHi.width = Math.round(dw * MS); mapHi.height = Math.round(dh * MS);
+    paintMap(mapHi.getContext('2d', { alpha: false }), ppm * DPR * MS, mapHi.width, mapHi.height);
+    mapDirty = true;
+  }
+  function drawMapView() {
+    const g = cvMap.getContext('2d', { alpha: false });
+    if (cam.z === 1) { paintMap(g, ppm * DPR, cvMap.width, cvMap.height); return; }
     g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#0e0f0f'; g.fillRect(0, 0, cvMap.width, cvMap.height);
+    const k = ppm * DPR * MS, w = W / cam.z, h = H / cam.z;
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(mapHi, (cam.cx - w / 2) * k, (cam.cy - h / 2) * k, w * k, h * k, 0, 0, cvMap.width, cvMap.height);
+  }
+  function paintMap(g, k, wd, ht) {
+    g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#0e0f0f'; g.fillRect(0, 0, wd, ht);
     g.setTransform(k, 0, 0, k, 0, 0); g.lineCap = 'round'; g.lineJoin = 'round';
     for (const bk of blocks) {
       g.beginPath();
@@ -399,7 +424,7 @@ function create(container, opts = {}) {
     N = NMAX;
     for (let i = 0; i < N; i++) { samplePrior(px, py, pt, i); pw[i] = 1 / N; pl[i] = 0.5; }
     wSlow = wFast = 0; lhRatio = 1; lowCount = 0; seedT = simT; neff = N;
-    lockedOnce = false; lockT = 0; lockRun = 0; state = 'Searching'; hyp.n = 0; est.ok = false;
+    lockedOnce = false; lockT = 0; lockRun = 0; state = 'Searching'; hyp.n = 0; est.ok = false; eOn = false;
   }
   function predict(md, mdth) {
     const sa = 0.002 + 0.06 * Math.abs(mdth);
@@ -469,9 +494,19 @@ function create(container, opts = {}) {
       for (let oy = -4; oy <= 4; oy++) for (let ox = -4; ox <= 4; ox++) { const xx = bx + ox, yy = by + oy; if (xx >= 0 && yy >= 0 && xx < HW && yy < HH) sup[yy * HW + xx] = 1; }
       const cx = (bx + 0.5) * HB - M, cy = (by + 0.5) * HB - M;
       let sw = 0, mx = 0, my = 0;
-      for (let i = 0; i < N; i++) { const dx = px[i] - cx, dy = py[i] - cy; if (dx * dx + dy * dy < R2) { sw += pw[i]; mx += pw[i] * px[i]; my += pw[i] * py[i]; } }
+      hbins.fill(0);
+      for (let i = 0; i < N; i++) { const dx = px[i] - cx, dy = py[i] - cy; if (dx * dx + dy * dy < R2) { sw += pw[i]; mx += pw[i] * px[i]; my += pw[i] * py[i]; hbins[(((wrapPi(pt[i]) + Math.PI) / TAU * 36) | 0) % 36] += pw[i]; } }
       if (sw <= 0) continue;
-      hyp.x[hyp.n] = mx / sw; hyp.y[hyp.n] = my / sw; hyp.m[hyp.n] = sw; hyp.n++;
+      hyp.x[hyp.n] = mx / sw; hyp.y[hyp.n] = my / sw; hyp.m[hyp.n] = sw;
+      // The ring sits on the guesses of the dominant heading only: at an intersection a cluster also holds guesses on
+      // the cross street, and the average of both lands between the streets.
+      let hb = 0; for (let k = 1; k < 36; k++) if (hbins[k] + hbins[(k + 35) % 36] + hbins[(k + 1) % 36] > hbins[hb] + hbins[(hb + 35) % 36] + hbins[(hb + 1) % 36]) hb = k;
+      const hm = (hb + 0.5) / 36 * TAU - Math.PI;
+      let hw = 0, hxs = 0, hys = 0, hc = 0, hs = 0;
+      for (let i = 0; i < N; i++) { const dx = px[i] - cx, dy = py[i] - cy; if (dx * dx + dy * dy < R2 && Math.abs(wrapPi(pt[i] - hm)) < 0.5) { const w = pw[i]; hw += w; hxs += w * px[i]; hys += w * py[i]; hc += w * Math.cos(pt[i]); hs += w * Math.sin(pt[i]); } }
+      if (hw > 0) { hd.x[hyp.n] = hxs / hw; hd.y[hyp.n] = hys / hw; hd.th[hyp.n] = Math.atan2(hs, hc); }
+      else { hd.x[hyp.n] = hyp.x[hyp.n]; hd.y[hyp.n] = hyp.y[hyp.n]; hd.th[hyp.n] = hm; }
+      hyp.n++;
     }
     if (!hyp.n) { est.ok = false; return; }
     const cx = hyp.x[0], cy = hyp.y[0];
@@ -498,20 +533,23 @@ function create(container, opts = {}) {
   /* ---------- Traces ---------- */
   const TR = 900, trT = new Float32Array(TR * 2).fill(NaN), trE = new Float32Array(TR * 2).fill(NaN);
   let trHead = 0;
-  const disp = { x: 0, y: 0, a: 0, b: 0, ang: 0, th: 0, alpha: 0 };
   function pushTrace(gap) {
     trT[trHead * 2] = gap ? NaN : veh.x; trT[trHead * 2 + 1] = veh.y;
-    trE[trHead * 2] = !gap && disp.alpha > 0.6 && state === 'Locked' ? disp.x : NaN; trE[trHead * 2 + 1] = disp.y;
+    // The estimate's trail comes from the same carried pose as the confidence ring, so the two always agree.
+    const ep = eOn ? gPose(eT) : null;
+    trE[trHead * 2] = !gap && ep && state === 'Locked' ? ep[0] : NaN; trE[trHead * 2 + 1] = ep ? ep[1] : NaN;
     trHead = (trHead + 1) % TR;
   }
   function simStep() {
     const x0 = veh.x, y0 = veh.y, t0 = veh.th;
     stepVehicle(DT);
     const d = Math.hypot(veh.x - x0, veh.y - y0), dth = wrapPi(veh.th - t0);
-    predict(d * (1 + ODO_SCALE) + gauss() * 0.02 * d, dth + GYRO_BIAS * DT + gauss() * 0.0012);
+    const md = d * (1 + ODO_SCALE) + gauss() * 0.02 * d, mdth = dth + GYRO_BIAS * DT + gauss() * 0.0012;
+    predict(md, mdth);
+    odTh += mdth; odX += md * Math.cos(odTh); odY += md * Math.sin(odTh);
     stepCount++; simT += DT;
     if (stepCount % 3 === 0) pushTrace(false);
-    if (stepCount % UPD === 0) { measurementUpdate(); estimate(); lastErr = est.ok ? Math.hypot(est.x - veh.x, est.y - veh.y) : NaN; }
+    if (stepCount % UPD === 0) { measurementUpdate(); estimate(); trackEstimate(); lastErr = est.ok ? Math.hypot(est.x - veh.x, est.y - veh.y) : NaN; }
   }
 
   /* ---------- Interaction ---------- */
@@ -534,7 +572,7 @@ function create(container, opts = {}) {
     const tok = ++preTok;
     let slice = performance.now();
     for (let i = 0; i < n; i++) {
-      simStep(); if (stepCount % UPD === 0) smoothDisplay(true);
+      simStep();
       if (performance.now() - slice > 8) { await yieldTask(); if (gen !== bootGen || tok !== preTok) return false; slice = performance.now(); }
     }
     lockFx = -1; dropFx = null; return true;
@@ -546,26 +584,13 @@ function create(container, opts = {}) {
     const e = edges[r.k], dir = rnd() < 0.5 ? 1 : -1, f = clamp(r.t / e.len, 0.2, 0.75);
     placeVehicle(r.k, dir, dir > 0 ? f : 1 - f);
     pushTrace(true); trE.fill(NaN);
-    seedFilter(true); disp.alpha = 0;
+    seedFilter(true);
     event(auto ? 'Moved the car. Searching again' : 'You moved the car. Searching again');
     dropFx = { x: veh.x, y: veh.y, t: performance.now() };
     if (reduceMotion) { tween0 = -1; prerun(1200, bootGen).then(ok => { if (ok) { render(performance.now()); report(); } }); }
   }
 
   /* ---------- Rendering ---------- */
-  function smoothDisplay(snap) {
-    const show = est.ok && (state === 'Locked' || state === 'Converging' || state === 'Lost');
-    disp.alpha += ((show ? 1 : 0) - disp.alpha) * (snap ? 1 : 0.08);
-    if (!est.ok) return;
-    const tr = est.sxx + est.syy, dsc = Math.sqrt(Math.max(0, tr * tr / 4 - (est.sxx * est.syy - est.sxy * est.sxy)));
-    const a = Math.max(6 / ppm, 2 * Math.sqrt(tr / 2 + dsc)), b = Math.max(6 / ppm, 2 * Math.sqrt(Math.max(0, tr / 2 - dsc)));
-    const ang = 0.5 * Math.atan2(2 * est.sxy, est.sxx - est.syy);
-    if (snap || Math.hypot(est.x - disp.x, est.y - disp.y) > 60 || disp.alpha < 0.05) { Object.assign(disp, { x: est.x, y: est.y, a, b, ang, th: est.th }); return; }
-    const k = 0.16;
-    disp.x += (est.x - disp.x) * k; disp.y += (est.y - disp.y) * k; disp.a += (a - disp.a) * k; disp.b += (b - disp.b) * k;
-    let da = ang - disp.ang; da -= Math.PI * Math.round(da / Math.PI); disp.ang += da * k;
-    disp.th += wrapPi(est.th - disp.th) * k;
-  }
   // The same car as the hero: warm glow, headlight beam, body with windshield and rear window.
   const glowS = document.createElement('canvas'), beamS = document.createElement('canvas');
   {
@@ -584,7 +609,7 @@ function create(container, opts = {}) {
     c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
   };
   function drawCar(x, y, ang) {
-    const u = 1 / ppm;   // sizes below are screen px, same as the hero
+    const u = SU;   // sizes below are screen px, same as the hero
     fx.drawImage(glowS, x - 22 * u, y - 22 * u, 44 * u, 44 * u);
     fx.save(); fx.translate(x, y); fx.rotate(ang); fx.scale(u, u);
     fx.drawImage(beamS, 7, -12, 46, 24);
@@ -598,7 +623,7 @@ function create(container, opts = {}) {
   function strokeTrail(buf, rgb, maxA, w) {
     // Opacity follows a continuous curve; a new piece starts only when the 8-bit alpha changes.
     // Flat caps keep neighbouring pieces from overlapping into visible seams.
-    fx.lineWidth = w / ppm; fx.lineCap = 'butt';
+    fx.lineWidth = w * SU; fx.lineCap = 'butt';
     const top = maxA * 255;
     let lvl = -1, pen = false, lx = 0, ly = 0;
     for (let j = 0; j < TR; j++) {
@@ -612,9 +637,162 @@ function create(container, opts = {}) {
     if (pen && lvl > 0) fx.stroke();
     fx.lineCap = 'round';
   }
-  let hover = null, hoverDirty = false, hx = 0, hy = 0;
+  /* ---------- Camera: overview while searching; once found, one continuous spring glides in and follows ---------- */
+  // The spring state (cs) chases the car freely. Only the displayed view (cam) is held inside the map, through a
+  // smooth clamp, so reaching an edge eases in instead of stopping hard, and zooming in can never deadlock.
+  const cs = { z: 1, cx: 0, cy: 0 }, cam = { z: 1, cx: 0, cy: 0 }, camV = { z: 0, x: 0, y: 0 }, lead = { x: 1, y: 0 };
+  const ZF = 1.8;
+  let camMoved = true, SU = 1, camFollow = false, lastCamT = 0;
+  const trans = { t0: -1e9, dur: 1, cx: 0, cy: 0, z: 1 };
+  const easeIO = t => 0.5 - 0.5 * Math.cos(Math.PI * t);    // sine ease: gentlest peak speed and acceleration
+  // Critically damped spring (SmoothDamp): follows a moving target smoothly and never overshoots.
+  function damp(cur, tgt, vel, st, dt) {
+    const om = 2 / st, x = om * dt, e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x), ch = cur - tgt, tmp = (vel + om * ch) * dt;
+    return [tgt + (ch + tmp) * e, (vel - om * tmp) * e];
+  }
+  // Smooth version of clamp(v, lo, hi): softplus corners of width w, so the view glides to a stop at the map edge.
+  function softClamp(v, lo, hi, w) {
+    if (hi - lo < 1e-6) return (lo + hi) / 2;
+    w *= Math.tanh((hi - lo) / (4 * w));   // softness shrinks smoothly as the free range closes (no kink)
+    const sp = x => x / w > 30 ? x : w * Math.log1p(Math.exp(x / w));
+    const a = lo + sp(v - lo);
+    return hi - sp(hi - a);
+  }
+  function resetCam() { cs.z = cam.z = 1; cs.cx = cam.cx = W / 2; cs.cy = cam.cy = H / 2; camV.z = camV.x = camV.y = 0; camFollow = false; trans.t0 = -1e9; mapDirty = true; }
+  function updateCam(now) {
+    const dt = lastCamT ? Math.min(0.1, Math.max(0.001, (now - lastCamT) / 1000)) : 1 / 60; lastCamT = now;
+    const follow = lockedOnce && !reduceMotion;
+    // On a switch between overview and follow, ease the target out of the current view so the camera starts gently.
+    if (follow !== camFollow) { Object.assign(trans, { t0: now, dur: follow ? 2200 : 1400, cx: cs.cx, cy: cs.cy, z: cs.z }); }
+    if (follow && !camFollow) { lead.x = Math.cos(veh.th); lead.y = Math.sin(veh.th); }
+    camFollow = follow;
+    let tz = 1, tx = W / 2, ty = H / 2, st = 0.6;
+    if (follow) {
+      // Aim a little ahead of the car along a heading smoothed over about a second, so turns do not swing the view.
+      const k = 1 - Math.exp(-dt / 1.0); lead.x += (Math.cos(veh.th) - lead.x) * k; lead.y += (Math.sin(veh.th) - lead.y) * k;
+      tx = veh.x + lead.x * 18; ty = veh.y + lead.y * 18;
+      // Zoom in only as fast as the spring closes in on the car, so the car never slips out of view mid-glide.
+      const dx = Math.abs(veh.x - cs.cx), dy = Math.abs(veh.y - cs.cy);
+      tz = clamp(Math.min(dx > 1 ? 0.85 * W / (2 * dx) : 99, dy > 1 ? 0.85 * H / (2 * dy) : 99), 1, ZF);
+      st = 0.5;
+    }
+    const eu = clamp((now - trans.t0) / trans.dur, 0, 1);
+    if (eu < 1) { const e = easeIO(eu); tx = trans.cx + (tx - trans.cx) * e; ty = trans.cy + (ty - trans.cy) * e; tz = Math.exp(Math.log(trans.z) + (Math.log(tz) - Math.log(trans.z)) * e); }
+    const x0 = cam.cx, y0 = cam.cy, z0 = cam.z;
+    let lz; [lz, camV.z] = damp(Math.log(cs.z), Math.log(tz), camV.z, st * 1.15, dt); cs.z = Math.exp(lz);
+    [cs.cx, camV.x] = damp(cs.cx, tx, camV.x, st, dt); [cs.cy, camV.y] = damp(cs.cy, ty, camV.y, st, dt);
+    // Settle exactly into the overview, where the map is painted crisply at screen resolution.
+    if (!follow && eu >= 1 && Math.abs(lz) < 1e-4 && Math.abs(camV.z) < 1e-3) { cs.z = 1; camV.z = 0; }
+    cam.z = cs.z;
+    const hw = W / (2 * cam.z), hh = H / (2 * cam.z);
+    cam.cx = softClamp(cs.cx, hw, W - hw, 16); cam.cy = softClamp(cs.cy, hh, H - hh, 16);
+    camMoved = Math.abs(cam.cx - x0) + Math.abs(cam.cy - y0) > 1e-3 || Math.abs(cam.z - z0) > 1e-5;
+  }
+  const toWorld = (sx, sy) => [cam.cx + (sx - vw / 2) / (ppm * cam.z), cam.cy + (sy - vh / 2) / (ppm * cam.z)];
+  const toScreen = (x, y) => [(x - cam.cx) * ppm * cam.z + vw / 2, (y - cam.cy) * ppm * cam.z + vh / 2];
+
+  /* ---------- Rings carried by the odometry ---------- */
+  // Each hypothesis ring is a rigid transform from the dead-reckoning frame to the map (rotation phi, offset tx, ty),
+  // so between the filter's 10 Hz estimates it moves exactly as the car does; each estimate only nudges it. The
+  // confidence ring after lock is carried the same way, so it sits on the car instead of trailing a smoothed mean.
+  const rings = [];
+  const gPose = T => { const c = Math.cos(T.phi), s2 = Math.sin(T.phi); return [T.tx + c * odX - s2 * odY, T.ty + s2 * odX + c * odY, T.phi + odTh]; };
+  const setPose = (T, x, y, h) => { T.phi = h - odTh; const c = Math.cos(T.phi), s2 = Math.sin(T.phi); T.tx = x - (c * odX - s2 * odY); T.ty = y - (s2 * odX + c * odY); };
+  let lastRingT = 0;
+  const eT = {}, eG = {}; let eOn = false, eP = null;
+  // Weighted pose of the guesses within 60 m of (x, y) whose heading is within 35 degrees of h; null if too few.
+  function localPose(x, y, h) {
+    let w = 0, mx = 0, my = 0, hc = 0, hs = 0;
+    for (let i = 0; i < N; i++) {
+      const dx = px[i] - x, dy = py[i] - y;
+      if (dx * dx + dy * dy < 3600 && Math.abs(wrapPi(pt[i] - h)) < 0.61) { const q = pw[i]; w += q; mx += q * px[i]; my += q * py[i]; hc += q * Math.cos(pt[i]); hs += q * Math.sin(pt[i]); }
+    }
+    return w > 0.03 ? [mx / w, my / w, Math.atan2(hs, hc)] : null;
+  }
+  // Runs with every filter estimate (in the simulation, so it also runs in the reduced-motion pre-run): sets where
+  // the confidence ring and each hypothesis ring should be. Drawing eases the rings toward these targets.
+  function trackEstimate() {
+    {
+      if (!lockedOnce || !est.ok) eOn = false;
+      else {
+        const tg = (eOn && localPose(...gPose(eT))) || [est.x, est.y, est.th];
+        if (!eOn || Math.hypot(tg[0] - gPose(eT)[0], tg[1] - gPose(eT)[1]) > 60) {
+          // Pick up from the leading hypothesis ring so the hand-off at lock is seamless.
+          let bg = null; for (const g of rings) if (!g.dead && g.T.phi !== undefined && (!bg || g.m > bg.m)) bg = g;
+          const gp = bg && gPose(bg.T);
+          if (gp && Math.hypot(gp[0] - tg[0], gp[1] - tg[1]) < 70) Object.assign(eT, bg.T); else setPose(eT, tg[0], tg[1], tg[2]);
+          if (!eOn) confR = 20;
+          eOn = true;
+        }
+        setPose(eG, tg[0], tg[1], tg[2]);
+        if (!running) Object.assign(eT, eG);
+      }
+      for (const g of rings) g.seen = false;
+      if (state !== 'Locked') for (let r = 0; r < hyp.n; r++) {
+        const m = hyp.m[r];
+        let best = null, bd = 70 * 70;
+        for (const g of rings) { if (g.seen || g.dead) continue; const [x, y] = gPose(g.T); const d = (x - hd.x[r]) ** 2 + (y - hd.y[r]) ** 2; if (d < bd) { bd = d; best = g; } }
+        if (best) {
+          // Follow this ring's own group: guesses near it that face its way. A cluster at an intersection also holds
+          // guesses on the cross street; they must not pull the ring off its street.
+          const [gx, gy, gh] = gPose(best.T), lp = localPose(gx, gy, gh);
+          if (lp) { if (m < 0.06) continue; best.seen = true; best.tm = m; setPose(best.G, lp[0], lp[1], lp[2]); if (!running) Object.assign(best.T, best.G); continue; }
+          if (Math.abs(wrapPi(hd.th[r] - gh)) > 1.05) { best.dead = true; best = null; }   // a different group: fade out, start fresh
+          else { if (m < 0.06) continue; best.seen = true; best.tm = m; setPose(best.G, hd.x[r], hd.y[r], hd.th[r]); if (!running) Object.assign(best.T, best.G); continue; }
+        }
+        if (m < 0.12) continue;                        // hysteresis: a ring appears at 12% and leaves below 6%
+        const ng = { T: {}, G: {}, m, tm: m, a: 0, seen: true }; setPose(ng.T, hd.x[r], hd.y[r], hd.th[r]); setPose(ng.G, hd.x[r], hd.y[r], hd.th[r]); rings.push(ng);
+      }
+      // Rings that left before they were ever drawn (only possible without frames, as in the pre-run) are dropped here.
+      for (let i = rings.length - 1; i >= 0; i--) if (!rings[i].seen && rings[i].a === 0) rings.splice(i, 1);
+    }
+  }
+  function updateRings(now) {
+    const dt = lastRingT ? Math.min(0.1, Math.max(0.001, (now - lastRingT) / 1000)) : 1 / 60; lastRingT = now;
+    // Single settled frames (reduced motion, or a redraw while paused) snap straight to their targets.
+    // Rings leave faster at lock than while searching, since the confidence ring takes over.
+    const kp = running ? 1 - Math.exp(-dt / 0.35) : 1, kh = running ? 1 - Math.exp(-dt / 0.7) : 1, ka = running ? 1 - Math.exp(-dt / (state === 'Locked' ? 0.12 : 0.3)) : 1;
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const g = rings[i];
+      g.a += ((g.seen ? 1 : 0) - g.a) * ka;
+      if (g.seen && g.G.phi !== undefined) {
+        const [x, y, h] = gPose(g.T), [gx, gy, gh] = gPose(g.G);
+        setPose(g.T, x + (gx - x) * kp, y + (gy - y) * kp, h + wrapPi(gh - h) * kh);
+        g.m += (g.tm - g.m) * kp;
+      }
+      if (!g.seen && g.a < 0.01) rings.splice(i, 1);
+    }
+    if (eOn) { const [x, y, h] = gPose(eT), [gx, gy, gh] = gPose(eG); setPose(eT, x + (gx - x) * kp, y + (gy - y) * kp, h + wrapPi(gh - h) * kh); eP = gPose(eT); }
+    else eP = null;
+  }
+  // Competing hypotheses while searching: a quiet ring and its share of probability.
+  function drawRings() {
+    fx.font = `400 ${11 * SU}px "IBM Plex Mono", monospace`; fx.textBaseline = 'middle';
+    const xl = cam.cx - W / (2 * cam.z) + 4 * SU, xr = cam.cx + W / (2 * cam.z) - 4 * SU;
+    for (const g of rings) {
+      if (g.a < 0.01) continue;
+      const [x, y] = gPose(g.T), m = g.m;
+      const a = clamp(0.3 + m * 0.8, 0, 0.9) * g.a, rad = (16 + 22 * Math.sqrt(m)) * SU;
+      fx.beginPath(); fx.arc(x, y, rad, 0, TAU);
+      fx.strokeStyle = `rgba(255,160,120,${(a * 0.7).toFixed(3)})`; fx.lineWidth = SU; fx.stroke();
+      fx.fillStyle = `rgba(255,210,190,${a.toFixed(3)})`;
+      // Keep the label inside the view: to the right of the ring, flipped to the left near the right edge, and held
+      // inside when neither side fits.
+      const lbl = `${Math.round(m * 100)}%`, lw = fx.measureText(lbl).width, gap = rad + 6 * SU;
+      let lx = x + gap;
+      if (lx + lw > xr) lx = x - gap - lw >= xl ? x - gap - lw : clamp(lx, xl, xr - lw);
+      fx.textAlign = 'left'; fx.fillText(lbl, lx, y);
+    }
+  }
+
+  let hover = null, hoverDirty = false, hx = 0, hy = 0, confR = 20, confA = 0, lastConfT = 0;
   function render(now) {
-    const k = ppm * DPR, tw = tween0 >= 0 ? (now - tween0) / 1000 : 9;
+    updateCam(now);
+    if (camMoved || mapDirty) { drawMapView(); mapDirty = false; }
+    SU = 1 / (ppm * cam.z);
+    // World metres to device px through the camera. In the overview this is exactly the old ppm * DPR scale.
+    const k = ppm * DPR * cam.z, ex = DPR * vw / 2 - k * cam.cx, ey = DPR * vh / 2 - k * cam.cy;
+    const tw = tween0 >= 0 ? (now - tween0) / 1000 : 9;
     if (tw > 1.3) tween0 = -1;
     const spread = clamp(est.ok ? est.frac : 0, 0, 1);
     const useGL = gl && !glLost;
@@ -622,7 +800,7 @@ function create(container, opts = {}) {
       for (let i = 0; i < N; i++) {
         let x = px[i], y = py[i];
         if (tween0 >= 0) { const u = ease3(clamp((tw - delay[i]) / 0.9, 0, 1)); x = fromX[i] + (x - fromX[i]) * u; y = fromY[i] + (y - fromY[i]) * u; }
-        vbuf[i * 3] = x * k; vbuf[i * 3 + 1] = y * k; vbuf[i * 3 + 2] = pl[i] > 1 ? 1 : pl[i];
+        vbuf[i * 3] = x * k + ex; vbuf[i * 3 + 1] = y * k + ey; vbuf[i * 3 + 2] = pl[i] > 1 ? 1 : pl[i];
       }
       gl.viewport(0, 0, cvPf.width, cvPf.height); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.bindVertexArray(glVao); gl.bindBuffer(gl.ARRAY_BUFFER, glBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, vbuf, 0, N * 3);
@@ -630,48 +808,39 @@ function create(container, opts = {}) {
       gl.drawArrays(gl.POINTS, 0, N);
     }
     fx.setTransform(1, 0, 0, 1, 0, 0); fx.clearRect(0, 0, cvFx.width, cvFx.height);
-    fx.setTransform(k, 0, 0, k, 0, 0); fx.lineCap = 'round'; fx.lineJoin = 'round';
-    if (!useGL) { fx.fillStyle = 'rgba(255,122,69,0.45)'; for (let i = 0; i < N; i += 2) fx.fillRect(px[i], py[i], 1.6 / ppm, 1.6 / ppm); }
-    // Competing hypotheses while searching: a quiet ring and share of probability.
-    if (state !== 'Locked' && hyp.n && tween0 < 0) {
-      fx.font = `400 ${11 / ppm}px "IBM Plex Mono", monospace`; fx.textBaseline = 'middle';
-      for (let r = 0; r < hyp.n; r++) {
-        const m = hyp.m[r]; if (m < 0.04) continue;
-        const a = clamp(0.3 + m * 0.8, 0, 0.9), rad = (16 + 22 * Math.sqrt(m)) / ppm;
-        fx.beginPath(); fx.arc(hyp.x[r], hyp.y[r], rad, 0, TAU);
-        fx.strokeStyle = `rgba(255,160,120,${(a * 0.7).toFixed(2)})`; fx.lineWidth = 1 / ppm; fx.stroke();
-        fx.fillStyle = `rgba(255,210,190,${a.toFixed(2)})`;
-        // Keep the label inside the frame: flip it to the left of the ring near the right edge.
-        const lbl = `${Math.round(m * 100)}%`, lw = fx.measureText(lbl).width;
-        if (hyp.x[r] + rad + 6 / ppm + lw > W - 4 / ppm) { fx.textAlign = 'right'; fx.fillText(lbl, hyp.x[r] - rad - 6 / ppm, hyp.y[r]); fx.textAlign = 'left'; }
-        else fx.fillText(lbl, hyp.x[r] + rad + 6 / ppm, hyp.y[r]);
-      }
-    }
+    fx.setTransform(k, 0, 0, k, ex, ey); fx.lineCap = 'round'; fx.lineJoin = 'round';
+    if (!useGL) { fx.fillStyle = 'rgba(255,122,69,0.45)'; for (let i = 0; i < N; i += 2) fx.fillRect(px[i], py[i], 1.6 * SU, 1.6 * SU); }
+    updateRings(now);
+    if (rings.length) drawRings();
     strokeTrail(trT, '236,234,229', 0.42, 1.4);
     strokeTrail(trE, '255,122,69', 0.95, 1.9);
-    if (disp.alpha > 0.02) {
-      fx.globalAlpha = disp.alpha;
-      fx.beginPath(); fx.ellipse(disp.x, disp.y, disp.a, disp.b, disp.ang, 0, TAU);
-      fx.fillStyle = 'rgba(255,122,69,0.08)'; fx.fill();
-      fx.strokeStyle = 'rgba(255,122,69,0.85)'; fx.lineWidth = 1 / ppm; fx.stroke();
-      fx.globalAlpha = 1;
+    // Confidence ring: a circle around the estimate of 2 sigma, smoothed so it breathes instead of warping, and
+    // never smaller than the car's glow so the car always sits inside it.
+    const dtc = lastConfT ? Math.min(0.1, (now - lastConfT) / 1000) : 1 / 60; lastConfT = now;
+    const showConf = lockedOnce && eP;
+    confA = running ? confA + ((showConf ? 1 : 0) - confA) * (1 - Math.exp(-dtc / 0.25)) : showConf ? 1 : 0;
+    if (eP && confA > 0.01) {
+      const rt = clamp(2 * est.sig, 5, 40);
+      confR = running ? confR + (rt - confR) * (1 - Math.exp(-dtc / 0.6)) : rt;
+      fx.globalAlpha = confA; fx.beginPath(); fx.arc(eP[0], eP[1], Math.max(confR, 26 * SU), 0, TAU);
+      fx.fillStyle = 'rgba(255,122,69,0.06)'; fx.fill(); fx.strokeStyle = 'rgba(255,122,69,0.5)'; fx.lineWidth = SU; fx.stroke(); fx.globalAlpha = 1;
     }
     drawCar(veh.x, veh.y, veh.th);
     if (lockFx > 0) {
       const a = (now - lockFx) / 1000;
       if (a > 1.6) lockFx = -1;
-      else for (let r = 0; r < 2; r++) { const aa = a - r * 0.2; if (aa <= 0) continue; const u = Math.min(1, aa / 1.2); fx.beginPath(); fx.arc(veh.x, veh.y, (10 + ease3(u) * 40) / ppm, 0, TAU); fx.strokeStyle = `rgba(255,122,69,${(0.8 * (1 - u)).toFixed(3)})`; fx.lineWidth = 1.4 / ppm; fx.stroke(); }
+      else for (let r = 0; r < 2; r++) { const aa = a - r * 0.2; if (aa <= 0) continue; const u = Math.min(1, aa / 1.2); fx.beginPath(); fx.arc(veh.x, veh.y, (10 + ease3(u) * 40) * SU, 0, TAU); fx.strokeStyle = `rgba(255,122,69,${(0.8 * (1 - u)).toFixed(3)})`; fx.lineWidth = 1.4 * SU; fx.stroke(); }
     }
     if (dropFx) {
       const a = (now - dropFx.t) / 1000;
       if (a > 1.4) dropFx = null;
-      else { const u = Math.min(1, a / 1.2); fx.beginPath(); fx.arc(dropFx.x, dropFx.y, (8 + ease3(u) * 80) / ppm, 0, TAU); fx.strokeStyle = `rgba(236,234,229,${(0.6 * (1 - u)).toFixed(3)})`; fx.lineWidth = 1.2 / ppm; fx.stroke(); }
+      else { const u = Math.min(1, a / 1.2); fx.beginPath(); fx.arc(dropFx.x, dropFx.y, (8 + ease3(u) * 80) * SU, 0, TAU); fx.strokeStyle = `rgba(236,234,229,${(0.6 * (1 - u)).toFixed(3)})`; fx.lineWidth = 1.2 * SU; fx.stroke(); }
     }
     // Hover preview of where a click puts the car.
     fx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    if (hoverDirty) { hoverDirty = false; const r = nearestRoad(hx / ppm, hy / ppm); hover = r && r.d * ppm < 60 ? { x: nX[edges[r.k].a] + edges[r.k].ux * r.t, y: nY[edges[r.k].a] + edges[r.k].uy * r.t } : null; }
+    if (hoverDirty) { hoverDirty = false; const [wx, wy] = toWorld(hx, hy), r = nearestRoad(wx, wy); hover = r && r.d * ppm * cam.z < 60 ? { x: nX[edges[r.k].a] + edges[r.k].ux * r.t, y: nY[edges[r.k].a] + edges[r.k].uy * r.t } : null; }
     if (hover) {
-      const x = hover.x * ppm, y = hover.y * ppm;
+      const [x, y] = toScreen(hover.x, hover.y);
       fx.strokeStyle = 'rgba(236,234,229,0.7)'; fx.lineWidth = 1;
       fx.beginPath(); fx.arc(x, y, 7, 0, TAU); fx.stroke();
       fx.beginPath(); fx.arc(x, y, 1.5, 0, TAU); fx.fillStyle = 'rgba(236,234,229,0.9)'; fx.fill();
@@ -679,7 +848,7 @@ function create(container, opts = {}) {
   }
   let reportT = 0;
   function report() {
-    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, eventN, hyp: hyp.n });
+    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, eventN, hyp: hyp.n, frac: est.ok ? est.frac : 0 });
   }
 
   /* ---------- Loop ---------- */
@@ -691,7 +860,6 @@ function create(container, opts = {}) {
     acc += dt; let n = 0;
     while (acc >= STEP && n < 3) { simStep(); acc -= STEP; n++; }
     if (n === 3) acc = 0;
-    smoothDisplay(false);
     if (t - lastDraw > 11) { lastDraw = t; render(t); }   // full rate up to 90 Hz, about 60 fps above that
     if (t - reportT > 150) { reportT = t; report(); }
   }
@@ -703,7 +871,7 @@ function create(container, opts = {}) {
   document.addEventListener('visibilitychange', setRunning);
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; setRunning(); }, { rootMargin: '120px' }).observe(container);
   const local = ev => { const r = cvFx.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
-  cvFx.addEventListener('click', ev => { const [x, y] = local(ev); dropAt(x / ppm, y / ppm, false); });
+  cvFx.addEventListener('click', ev => { const [x, y] = local(ev), [wx, wy] = toWorld(x, y); dropAt(wx, wy, false); });
   if (matchMedia('(pointer: fine)').matches) {
     cvFx.addEventListener('pointermove', ev => { if (!built) return; [hx, hy] = local(ev); hoverDirty = true; if (!running) render(performance.now()); });
     cvFx.addEventListener('pointerleave', () => { hover = null; hoverDirty = false; if (built && !running) render(performance.now()); });
@@ -718,7 +886,8 @@ function create(container, opts = {}) {
     for (let j = 0; j < driveIdx.length; j++) { const k = driveIdx[j], e = edges[k]; if (inFocus(e.a) && inFocus(e.b)) { startE = k; if (rnd() < 0.15) break; } }
     placeVehicle(startE, 1, 0.3);
     simT = 0; stepCount = 0; trT.fill(NaN); trE.fill(NaN);
-    seedFilter(false); event('GPS denied. Searching');
+    odX = odY = odTh = 0; rings.length = 0; eOn = false; eP = null;
+    seedFilter(false); resetCam(); event('GPS denied. Searching');
     if (reduceMotion && !(await prerun(1500, gen))) return;
     built = true;
     render(performance.now()); report(); setRunning();

@@ -1,5 +1,5 @@
 // Wires the two live pieces of the page: the hero terrain and the particle-filter exhibit.
-// All copy lives in index.html; this file only drives the visuals and their status text.
+// All copy lives in index.html; this file only drives the visuals, the confidence meter and the screen-reader status.
 (function () {
 'use strict';
 const $ = id => document.getElementById(id);
@@ -30,10 +30,10 @@ const terrain = window.Terrain.init({
   },
 });
 
-/* Exhibit: particle filter. Status line under the map, plus a polite announcement on state changes. */
-const frame = $('pf'), dot = $('pf-dot'), st = $('pf-state'), det = $('pf-detail'), live = $('pf-live');
+/* Exhibit: particle filter. A confidence meter under the map, plus a polite announcement on state changes. */
+const frame = $('pf'), meter = $('pf-meter'), bar = $('pf-bar'), pct = $('pf-pct'), live = $('pf-live');
 if (matchMedia('(pointer: coarse)').matches) $('pf-hint').textContent = 'Tap the map to move the car.';
-let lastLabel = '', lastEventN = -1;
+let lastPct = -1, lastLocked = null, lastEventN = -1;
 // Announce each event (search started, car moved, car located). Clearing first makes a repeated message speak again.
 const announce = msg => { live.textContent = ''; setTimeout(() => { live.textContent = msg; }, 60); };
 const spoken = e => {
@@ -45,14 +45,10 @@ const spoken = e => {
 };
 const pf = window.Localize.create(frame, {
   onStatus: s => {
-    const locked = s.state === 'Locked';
-    dot.className = locked ? 'lock' : '';
-    const label = locked ? 'Locked' : s.state === 'Lost' ? 'Lost' : s.state === 'Converging' ? 'Converging' : 'Searching';
-    if (label !== lastLabel) { st.textContent = label; lastLabel = label; }
+    const locked = s.state === 'Locked', p = Math.round((locked ? 1 : s.frac) * 100);
+    if (p !== lastPct) { lastPct = p; bar.style.width = `${p}%`; pct.textContent = `${p}%`; }
+    if (locked !== lastLocked) { lastLocked = locked; meter.classList.toggle('done', locked); }
     if (s.eventN !== lastEventN) { lastEventN = s.eventN; announce(spoken(s.event)); }
-    det.textContent = locked
-      ? `in ${s.lockT.toFixed(1)} s, error ${s.err < 10 ? s.err.toFixed(1) : Math.round(s.err)} m, ${s.n.toLocaleString()} particles`
-      : `${s.n.toLocaleString()} particles, ${s.searchT.toFixed(1)} s`;
   },
 });
 // Keyboard users move the car with Enter or Space (held keys do not repeat). Screen readers activate the
