@@ -599,7 +599,7 @@ function create(container, opts = {}) {
   function setJam(on) {
     if (!built) return;
     const g = gps;
-    if (on && (g.mode === 0 || g.mode === 3)) { g.mode = 1; g.age = 0; g.jt = 0; event('GPS jammed'); }
+    if (on && (g.mode === 0 || g.mode === 3)) { g.mode = 1; g.age = 0; g.jt = 0; gTr.fill(NaN); event('GPS jammed'); }
     else if (!on && (g.mode === 1 || g.mode === 2)) { g.mode = 3; event('GPS restored'); }
     else return;
     if (reduceMotion) prerun(on ? 420 : 150, bootGen).then(ok => { if (ok) { render(performance.now()); report(); } });

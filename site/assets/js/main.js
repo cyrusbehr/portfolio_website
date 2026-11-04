@@ -29,7 +29,7 @@ if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObse
       const el = e.target;
       if (!el.dataset.rv) {   // first report: hide only what is still below the fold
         el.dataset.rv = '1';
-        if (!e.isIntersecting && e.boundingClientRect.top > 0) { el.classList.add('rv'); continue; }
+        if (e.boundingClientRect.top >= innerHeight) { el.classList.add('rv'); continue; }
         io.unobserve(el); continue;
       }
       if (e.isIntersecting) { el.classList.add('in'); io.unobserve(el); }
@@ -38,6 +38,8 @@ if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObse
   // Siblings in a row arrive one after another.
   for (const q of ['.marks li', '.stats > div', '.stack > div', '.row']) document.querySelectorAll(q).forEach((el, i, all) => { const sib = [...el.parentNode.children].indexOf(el); el.style.setProperty('--d', `${Math.min(sib, 5) * 70}ms`); });
   els.forEach(el => io.observe(el));
+  // Keyboard focus can land on a block that has not been revealed yet (the browser scrolls it only to the very edge).
+  document.addEventListener('focusin', e => { const el = e.target.closest('.rv'); if (el) { el.classList.add('in'); io.unobserve(el); } });
 }
 
 /* Press marks: hovering or focusing one names what it is, in a quiet line under the row. */
@@ -55,7 +57,7 @@ if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObse
 /* Email: shown and copied by script (not in the markup, so it is not scraped). Falls back to mailto. */
 {
   const btn = $('email'), live = $('email-live'), addr = ['cyrus.behr', 'gmail.com'].join('@');
-  btn.querySelector('.email-t').textContent = addr; btn.title = 'Copy email address'; btn.hidden = false;
+  btn.querySelector('.email-t').textContent = addr; btn.title = 'Copy email address'; btn.setAttribute('aria-label', `Copy email address, ${addr}`); btn.hidden = false;
   let t = 0;
   btn.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(addr); } catch (e) { location.href = `mailto:${addr}`; return; }
@@ -119,7 +121,7 @@ const spoken = e => {
 // Jam GPS: the button follows the demo's GPS state, and pulses once to invite a press when the car is first found.
 const jam = $('pf-jam'), jamT = jam.querySelector('.jam-t');
 let jammed = false, invited = false;
-const setJamUi = on => { if (on === jammed) return; jammed = on; jam.setAttribute('aria-pressed', String(on)); jamT.textContent = on ? 'Restore GPS' : 'Jam GPS'; };
+const setJamUi = on => { if (on === jammed) return; jammed = on; jam.dataset.jammed = String(on); jamT.textContent = on ? 'Restore GPS' : 'Jam GPS'; };
 const pf = window.Localize.create(frame, {
   onStatus: s => {
     const locked = s.state === 'Locked', p = Math.round((locked ? 1 : s.frac) * 100);

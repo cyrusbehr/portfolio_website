@@ -279,7 +279,8 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   const hit = (x, y) => { for (const r of rects) if (x > r[0] && x < r[2] && y > r[1] && y < r[3]) return true; return false; };
   function solveFraming() {
     const hr = hero.getBoundingClientRect(), rng = document.createRange(), pad = 36;
-    rects = avoid.map(el => { rng.selectNodeContents(el); const b = rng.getBoundingClientRect(); return [b.left - hr.left - pad, b.top - hr.top - pad, b.right - hr.left + pad, b.bottom - hr.top + pad]; }).filter(r => r[2] > r[0]);
+    rects = avoid.map(el => { rng.selectNodeContents(el); return rng.getBoundingClientRect(); }).filter(b => b.width > 0 && b.height > 0)
+      .map(b => [b.left - hr.left - pad, b.top - hr.top - pad, b.right - hr.left + pad, b.bottom - hr.top + pad]);
     const zk0 = zk, base = { ...pose }, out = [0, 0, 0], camSave = { ...cam, VP: cam.VP.slice() };
     zk = pose.ex / DEM.mpp;
     const tz = (meshH(pose.tx, pose.ty) - H0) * zk, wobble = [[0, 0], [-7, 1.5], [7, -1.5], [0, 6]];
@@ -406,9 +407,11 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     // A GPU reset or driver switch loses the context: keep drawing the overlay, and rebuild when it returns.
     cv.addEventListener('webglcontextlost', e => { e.preventDefault(); glLost = true; });
     cv.addEventListener('webglcontextrestored', () => {
-      progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); vaoR = null; roadsOn = false;
+      progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); vaoR = null; roadsOn = false; ib = null;
+      // Lost before the first data was in: load() sets up the new context when the data arrives.
+      if (!pre) { glLost = false; return; }
       setupGL(); if (elev) { texB = makeTex(EW, EH, elev, water); uploadGridH(); } if (roads.length) buildRoads();
-      glLost = false; if (t0 >= 0) draw(performance.now(), true);
+      glLost = false; if (ready) draw(performance.now(), true);
     });
   }
   function makeTex(w, h, e, wa) {
@@ -562,7 +565,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   }
   const places = (labels || []).map(l => { const p = l.lat == null ? { ...l } : { ...l, ...(([x, y]) => ({ x, y }))(ll2px(l.lat, l.lon)) }; p.a = 0; return p; });
   let fontsOk = !document.fonts, labelsA = 0, carA = 0, carVis = 1, heading = 0, headingInit = false, lensA = 0;
-  if (document.fonts) document.fonts.ready.then(() => { fontsOk = true; });
+  if (document.fonts) document.fonts.ready.then(() => { fontsOk = true; if (reduce && ready) draw(performance.now(), true); });
   const carDist = t => reduce ? route.len * .3 : (t / 1000) * SPEED;
   function drawOverlay(t, dt) {
     octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);
@@ -714,8 +717,13 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   /* ---------- Frame ---------- */
   let raf = 0, visibleHero = true, lastGl = -1e9, lastOv = -1e9, lastRead = 0, slow = 0, lastT = 0, lastDt = 0, fadeV = 0, ready = false, glEvery = 0;
   let touch = false, readShown = '';
+  let sized = '';
   function resize() {
-    const r = hero.getBoundingClientRect(); vw = r.width; vh = r.height;
+    const r = hero.getBoundingClientRect();
+    // Phones fire resize as the URL bar slides during a scroll; the hero (100svh) does not change, so skip the work.
+    const key = `${r.width}x${r.height}@${devicePixelRatio}/${dprCap}`;
+    if (key === sized) return;
+    sized = key; vw = r.width; vh = r.height;
     dpr = Math.min(devicePixelRatio || 1, dprCap); dprOv = Math.min(devicePixelRatio || 1, 2);
     cv.width = Math.round(vw * dpr); cv.height = Math.round(vh * dpr);
     ov.width = Math.round(vw * dprOv); ov.height = Math.round(vh * dprOv);
@@ -859,7 +867,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     roadsP.then(data => {
       if (!data) return;
       setRoads(data);
-      if (gl) buildRoads();
+      if (gl && gA) buildRoads();   // without the preview, the grid (and so the road heights) comes with the full file
       roadsT = performance.now();
       if (reduce && ready) draw(performance.now(), true);
     });
@@ -876,7 +884,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
         // No preview script: build the grid from the full data and start now.
         const w = Math.floor(EW / PK), h = Math.floor(EH / PK), e = new Float32Array(w * h), wa = new Uint8Array(w * h);
         for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) { const k = (j * PK + PK / 2) * EW + i * PK + PK / 2; e[j * w + i] = elev[k]; wa[j * w + i] = water[k]; }
-        pre = { w, h, elev: e, water: wa }; setGridFromPreview(pre); EW = full.w; EH = full.h; setupGL();
+        pre = { w, h, elev: e, water: wa }; setGridFromPreview(pre); EW = full.w; EH = full.h; snapPeaks(); layout(); setupGL();
         ready = true; cv.classList.add('on'); stats.ready = true; if (reduce) draw(performance.now(), true); else start();
       }
       setGridFromFull(full);
