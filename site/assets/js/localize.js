@@ -1,5 +1,7 @@
 // Exhibit: a map-matching particle filter localizing a car with GPS denied.
 // It knows only the road map and noisy odometry (distance and heading change). Nothing is scripted.
+// A GPS fix is drawn alongside for comparison only: the filter never reads it, so jamming and spoofing it (one button)
+// leaves the estimate untouched.
 // Global search with an adaptive particle count, random injection until lock, and a sustained-lock rule.
 // While searching, each strong guess gets a ring with its share of probability; once the car is found, the camera
 // glides in and follows it, with a confidence ring around the estimate.
@@ -550,6 +552,7 @@ function create(container, opts = {}) {
   function simStep() {
     const x0 = veh.x, y0 = veh.y, t0 = veh.th;
     stepVehicle(DT);
+    stepGps(DT);
     const d = Math.hypot(veh.x - x0, veh.y - y0), dth = wrapPi(veh.th - t0);
     const md = d * (1 + ODO_SCALE) + gauss() * 0.02 * d, mdth = dth + GYRO_BIAS * DT + gauss() * 0.0012;
     predict(md, mdth);
@@ -557,6 +560,50 @@ function create(container, opts = {}) {
     stepCount++; simT += DT;
     if (stepCount % 3 === 0) pushTrace(false);
     if (stepCount % UPD === 0) { measurementUpdate(); estimate(); trackEstimate(); lastErr = est.ok ? Math.hypot(est.x - veh.x, est.y - veh.y) : NaN; }
+  }
+
+  /* ---------- GPS, for comparison only (the filter never sees it) ---------- */
+  // Mode 0: a healthy fix wandering a few metres around the car. 1: jammed, fixes jump around with a wide accuracy
+  // ring. 2: spoofed, a confident fix dragged steadily off the car (toward the river). 3: restored, gliding back.
+  // Times are simulation seconds, so the GPS keeps pace with the car.
+  const GTR = 160, gTr = new Float32Array(GTR * 2).fill(NaN);
+  const gps = { mode: 0, ox: 0, oy: 0, tx: 0, ty: 0, jt: 0, age: 0, sp: 0, dx: 0, dy: 1, r: 5, rT: 5, a: 1, x: 0, y: 0, head: 0, n: 0 };
+  function riverDir(x, y) {
+    let best = 1e18, bx = x, by = y + 1;
+    for (let i = 0; i < river.length; i += 2) { const d = (river[i] - x) ** 2 + (river[i + 1] - y) ** 2; if (d < best) { best = d; bx = river[i]; by = river[i + 1]; } }
+    const L = Math.hypot(bx - x, by - y) || 1; return [(bx - x) / L, (by - y) / L];
+  }
+  function stepGps(dt) {
+    const g = gps;
+    if (g.mode === 0) {
+      // Ornstein-Uhlenbeck wander: about 3 m of error, changing over a few seconds.
+      const k = dt / 3, q = 3 * Math.sqrt(2 * k);
+      g.ox += -g.ox * k + gauss() * q; g.oy += -g.oy * k + gauss() * q; g.rT = 5;
+    } else if (g.mode === 1) {
+      g.jt -= dt; g.age += dt;
+      if (g.jt <= 0) { g.jt = 0.25 + rnd() * 0.35; g.tx = gauss() * 45; g.ty = gauss() * 45; g.a = 0.35 + rnd() * 0.55; }
+      const k = 1 - Math.exp(-dt / 0.08); g.ox += (g.tx - g.ox) * k; g.oy += (g.ty - g.oy) * k; g.rT = 60;
+      if (g.age > 4.5) { g.mode = 2; g.sp = 0; [g.dx, g.dy] = riverDir(veh.x, veh.y); g.a = 1; }
+    } else if (g.mode === 2) {
+      g.sp = Math.min(11, g.sp + 3 * dt);
+      g.ox += g.dx * g.sp * dt; g.oy += g.dy * g.sp * dt; g.rT = 5;
+    } else {
+      const k = Math.exp(-dt / 0.6); g.ox *= k; g.oy *= k; g.rT = 5; g.a = 1;
+      if (Math.hypot(g.ox, g.oy) < 3) g.mode = 0;
+    }
+    g.r += (g.rT - g.r) * (1 - Math.exp(-dt / 0.5));
+    g.x = veh.x + g.ox; g.y = veh.y + g.oy;
+    // Breadcrumbs while the fix is off: a dotted record of where GPS claimed the car went.
+    if (++g.n % 6 === 0) { gTr[g.head * 2] = g.mode >= 2 ? g.x : NaN; gTr[g.head * 2 + 1] = g.y; g.head = (g.head + 1) % GTR; }
+  }
+  function setJam(on) {
+    if (!built) return;
+    const g = gps;
+    if (on && (g.mode === 0 || g.mode === 3)) { g.mode = 1; g.age = 0; g.jt = 0; event('GPS jammed'); }
+    else if (!on && (g.mode === 1 || g.mode === 2)) { g.mode = 3; event('GPS restored'); }
+    else return;
+    if (reduceMotion) prerun(on ? 420 : 150, bootGen).then(ok => { if (ok) { render(performance.now()); report(); } });
+    else report();
   }
 
   /* ---------- Interaction ---------- */
@@ -798,6 +845,60 @@ function create(container, opts = {}) {
     }
   }
 
+  // The GPS fix: breadcrumbs, a dashed tether to the car while it is off, the accuracy ring and a small label.
+  // If the fix leaves the view, a marker at the frame edge keeps pointing at it.
+  function drawGps() {
+    const g = gps, off = g.mode !== 0, err = Math.hypot(g.x - veh.x, g.y - veh.y);
+    if (off || g.mode === 3) {
+      for (let j = 0; j < GTR; j++) {
+        const q = ((g.head + j) % GTR) * 2, x = gTr[q], y = gTr[q + 1];
+        if (x !== x) continue;
+        fx.fillStyle = `rgba(236,234,229,${(0.42 * (j + 1) / GTR).toFixed(3)})`;
+        fx.beginPath(); fx.arc(x, y, 1.1 * SU, 0, TAU); fx.fill();
+      }
+    }
+    if (off && err > 14) {
+      fx.setLineDash([3 * SU, 4 * SU]); fx.lineWidth = SU; fx.strokeStyle = 'rgba(236,234,229,0.28)';
+      fx.beginPath(); fx.moveTo(veh.x, veh.y); fx.lineTo(g.x, g.y); fx.stroke(); fx.setLineDash([]);
+    }
+    const r = Math.max(g.r, 7 * SU);
+    fx.globalAlpha = g.a;
+    fx.beginPath(); fx.arc(g.x, g.y, r, 0, TAU); fx.fillStyle = 'rgba(236,234,229,0.05)'; fx.fill();
+    fx.lineWidth = SU; fx.strokeStyle = 'rgba(236,234,229,0.32)'; fx.stroke();
+    fx.beginPath(); fx.arc(g.x, g.y, 3.2 * SU, 0, TAU); fx.fillStyle = 'rgba(236,234,229,0.85)'; fx.fill();
+    fx.lineWidth = 1.5 * SU; fx.strokeStyle = 'rgba(14,15,15,0.9)'; fx.stroke();
+    // A healthy fix sits under the car and needs no label (the button's dot names it). Once it comes off the car,
+    // it is labelled on the side away from the car, with how far off it is.
+    const label = err > 14 ? `GPS ${err < 1000 ? Math.round(err) + ' m' : (err / 1000).toFixed(1) + ' km'}` : 'GPS';
+    const la = clamp((Math.max(err, off ? 40 : 0) - 10) / 20, 0, 1);
+    if (la > 0) {
+      fx.globalAlpha = g.a * la;
+      fx.font = `400 ${10.5 * SU}px "IBM Plex Mono", monospace`; fx.textBaseline = 'middle';
+      const left = g.x < veh.x; fx.textAlign = left ? 'right' : 'left';
+      fx.fillStyle = 'rgba(236,234,229,0.62)'; fx.fillText(label, g.x + (left ? -1 : 1) * (r + 5 * SU), g.y);
+    }
+    fx.globalAlpha = 1;
+    gpsEdge = off && err > 14 ? label : null;
+  }
+  let gpsEdge = null;
+  function drawGpsEdge() {
+    if (!gpsEdge) return;
+    const [gx, gy] = toScreen(gps.x, gps.y), [cx, cy] = toScreen(veh.x, veh.y), m = 14;
+    if (gx > m && gy > m && gx < vw - m && gy < vh - m) return;
+    // Where the line from the car to the fix leaves the frame.
+    let t = 1;
+    const dx = gx - cx, dy = gy - cy;
+    if (dx) t = Math.min(t, ((dx > 0 ? vw - m : m) - cx) / dx);
+    if (dy) t = Math.min(t, ((dy > 0 ? vh - m : m) - cy) / dy);
+    const ex = cx + dx * t, ey = cy + dy * t;
+    fx.beginPath(); fx.arc(ex, ey, 3.2, 0, TAU); fx.fillStyle = 'rgba(236,234,229,0.85)'; fx.fill();
+    fx.beginPath(); fx.arc(ex, ey, 7, 0, TAU); fx.strokeStyle = 'rgba(236,234,229,0.32)'; fx.lineWidth = 1; fx.stroke();
+    fx.font = '400 10.5px "IBM Plex Mono", monospace'; fx.textBaseline = 'middle';
+    const w = fx.measureText(gpsEdge).width, right = ex + 13 + w < vw - 6;
+    fx.textAlign = right ? 'left' : 'right'; fx.fillStyle = 'rgba(236,234,229,0.62)';
+    fx.fillText(gpsEdge, right ? ex + 13 : ex - 13, clamp(ey, 12, vh - 12));
+  }
+
   let hover = null, hoverDirty = false, hoverOn = false, hx = 0, hy = 0, confR = 20, confA = 0, lastConfT = 0;
   function render(now) {
     updateCam(now);
@@ -828,6 +929,7 @@ function create(container, opts = {}) {
     if (rings.length) drawRings();
     strokeTrail(trT, '236,234,229', 0.42, 1.4);
     strokeTrail(trE, '255,122,69', 0.95, 1.9);
+    drawGps();
     // Confidence ring: a circle around the estimate of 2 sigma, smoothed so it breathes instead of warping, and
     // never smaller than the car's glow so the car always sits inside it.
     const dtc = lastConfT ? Math.min(0.1, (now - lastConfT) / 1000) : 1 / 60; lastConfT = now;
@@ -852,6 +954,7 @@ function create(container, opts = {}) {
     }
     // Hover preview of where a click puts the car.
     fx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    drawGpsEdge();
     if (hoverDirty) { hoverDirty = false; const [wx, wy] = toWorld(hx, hy), r = nearestRoad(wx, wy); hover = r && r.d * ppm * cam.z < 60 ? { x: nX[edges[r.k].a] + edges[r.k].ux * r.t, y: nY[edges[r.k].a] + edges[r.k].uy * r.t } : null; }
     if (hover) {
       const [x, y] = toScreen(hover.x, hover.y);
@@ -862,7 +965,8 @@ function create(container, opts = {}) {
   }
   let reportT = 0;
   function report() {
-    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, eventN, hyp: hyp.n, frac: est.ok ? est.frac : 0 });
+    onStatus({ state, err: lastErr, n: N, lockT: lockedOnce ? lockT : null, searchT: (simT - seedT) / TS, event: lastEvent, eventN, hyp: hyp.n, frac: est.ok ? est.frac : 0,
+      gps: { mode: gps.mode, err: Math.hypot(gps.x - veh.x, gps.y - veh.y) } });
   }
 
   /* ---------- Loop ---------- */
@@ -901,7 +1005,8 @@ function create(container, opts = {}) {
     placeVehicle(startE, 1, 0.3);
     simT = 0; stepCount = 0; trT.fill(NaN); trE.fill(NaN);
     odX = odY = odTh = 0; rings.length = 0; eOn = false; eP = null;
-    seedFilter(false); resetCam(); event('GPS denied. Searching');
+    Object.assign(gps, { mode: 0, ox: 0, oy: 0, r: 5, rT: 5, a: 1, x: veh.x, y: veh.y }); gTr.fill(NaN);
+    seedFilter(false); resetCam(); event('Searching');
     if (reduceMotion && !(await prerun(1500, gen))) return;
     built = true;
     render(performance.now()); report(); setRunning();
@@ -922,6 +1027,8 @@ function create(container, opts = {}) {
     run: n => { const out = []; for (let i = 0; i < n; i++) { simStep(); if (stepCount % UPD === 0) out.push([+(simT / TS).toFixed(1), 0, 0, 0, 0, api.near(30), state, +lastErr.toFixed(1), +lhRatio.toFixed(2)]); } return out; },
     seq: () => Array.from(seq.subarray(0, Math.min(seqN, 4096))),
     ready: () => built,
+    jam: on => setJam(on),
+    gps: () => ({ mode: gps.mode, err: Math.hypot(gps.x - veh.x, gps.y - veh.y) }),
     dropRandom: () => { if (!built) return; const c = driveIdx[(rnd() * driveIdx.length) | 0], e = edges[c]; dropAt((nX[e.a] + nX[e.b]) / 2, (nY[e.a] + nY[e.b]) / 2, true); },
     bench: () => { let t0 = performance.now(); for (let i = 0; i < 60; i++) simStep(); const ts = performance.now() - t0; t0 = performance.now(); for (let i = 0; i < 30; i++) render(performance.now()); return { simMsPerStep: ts / 60, renderMs: (performance.now() - t0) / 30 }; },
   };
