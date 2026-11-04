@@ -3,7 +3,7 @@
 Personal site of Cyrus Behroozi, Director of Engineering at Tern. A single static page with no framework and no build step.
 
 - **Hero:** real west Austin terrain drawn live on the GPU as a contoured 3D relief, with OpenStreetMap roads draped over it and a car looping on real streets. On load the flat map tilts up into 3D while the relief rises; then it drifts slowly and follows the pointer. The line under it reads out the car's position and elevation, or the point under the cursor.
-- **Exhibit:** a live particle filter that works out where a car is using only its motion and the road map. Once it locks on, the camera glides in and follows the car. Click the map to move the car and watch it search again. **Jam GPS** jams, then spoofs, a GPS fix drawn for comparison (the filter never reads it), so the fix wanders off while the estimate stays on the car.
+- **Exhibit:** a live particle filter that works out where a car is using only its motion and the road map. Once it locks on, the camera glides in and follows the car. Click the map to move the car and watch it search again.
 
 ## Layout
 
@@ -13,8 +13,8 @@ site/                     everything that ships (Netlify publishes this folder)
   404.html
   assets/css/site.css
   assets/js/terrain.js    hero: WebGL2 3D terrain (mesh, per-pixel contours, draped roads), framing solver, CPU fallback
-  assets/js/localize.js   exhibit: particle filter, procedural city, vehicle model, follow camera, GPS jam/spoof
-  assets/js/main.js       wires everything: hero readout, exhibit (loaded after the hero draws), nav, reveals, email
+  assets/js/localize.js   exhibit: particle filter, procedural city, vehicle model, follow camera
+  assets/js/main.js       wires everything: hero readout, exhibit (loaded after the hero draws), nav, reveals
   assets/data/            elevation (Terrarium-encoded lossless WebP), its inlined quarter-resolution preview, roads
   assets/fonts/           self-hosted Schibsted Grotesk and IBM Plex Mono (latin subsets)
   assets/img/             portrait
