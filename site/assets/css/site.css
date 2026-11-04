@@ -36,8 +36,7 @@ img { display: block; max-width: 100%; height: auto; }
 /* ---------- Hero ---------- */
 .hero { position: relative; height: 100svh; min-height: 640px; max-height: 1040px; overflow: hidden; }
 .hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-#terrain { opacity: 0; transition: opacity 1.8s ease; }
-#terrain.on { opacity: 1; }
+/* The terrain fades itself in from the page colour, so the canvas needs no CSS transition. */
 #terrain-ov { pointer-events: none; }
 .hero-veil { position: absolute; inset: 0; pointer-events: none;
   background:
@@ -62,6 +61,8 @@ img { display: block; max-width: 100%; height: auto; }
 .attrib:hover { color: var(--ink); }
 .readout { font: 400 12px/1.4 var(--mono); color: var(--ink-3); letter-spacing: .01em; text-align: right; transition: color .3s; }
 .readout b { color: var(--ink); font-weight: 500; }
+.readout.live::before { content: ""; display: inline-block; box-sizing: border-box; width: 6px; height: 6px; margin-right: 10px; vertical-align: 1px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(255,122,69,.16); }
+.readout.cursor::before { width: 9px; height: 9px; vertical-align: -1px; background: none; border: 1px solid var(--accent); box-shadow: none; }
 @media (max-width: 1023px), (orientation: portrait) {
   .hero-veil { background: linear-gradient(0deg, rgba(11,12,12,1) 0%, rgba(11,12,12,.9) 34%, rgba(11,12,12,.2) 62%, rgba(11,12,12,0) 76%), linear-gradient(180deg, rgba(11,12,12,.7) 0%, rgba(11,12,12,0) 14%); }
   .hero-copy { bottom: 76px; }
