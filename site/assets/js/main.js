@@ -7,6 +7,63 @@ const debug = new URLSearchParams(location.search).has('debug');
 
 $('year').textContent = String(new Date().getFullYear());
 
+/* Floating nav: shown once the hero's own nav has scrolled away; marks the section in view. */
+{
+  const pill = $('pill'), links = [...pill.querySelectorAll('a[href^="#"]:not(.pill-brand)')];
+  new IntersectionObserver(([e]) => { const on = !e.isIntersecting; pill.classList.toggle('show', on); pill.inert = !on; }, { rootMargin: '-30% 0px 0px 0px' }).observe($('top'));
+  const seen = new Map();
+  const io = new IntersectionObserver(es => {
+    for (const e of es) seen.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
+    let best = '', r = 0; for (const [id, v] of seen) if (v > r) { r = v; best = id; }
+    for (const a of links) a.setAttribute('aria-current', String(a.getAttribute('href') === `#${best}`));
+  }, { threshold: [0, .15, .3, .5, .75, 1], rootMargin: '-40% 0px -40% 0px' });
+  for (const a of links) { const t = document.querySelector(a.getAttribute('href')); if (t) io.observe(t); }
+}
+
+/* Reveal on scroll: below-the-fold blocks rise in once as they arrive. Anything already on screen is left alone. */
+if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObserver' in window) {
+  const groups = ['.marks li', '.intro-text', '.stats > div', '.portrait', '.work h2', '.work-lede', '.exhibit', '.stack > div', '.record h2', '.rows-h', '.row', '.contact-h', '.contact-links'];
+  const els = groups.flatMap(q => [...document.querySelectorAll(q)]);
+  const io = new IntersectionObserver(es => {
+    for (const e of es) {
+      const el = e.target;
+      if (!el.dataset.rv) {   // first report: hide only what is still below the fold
+        el.dataset.rv = '1';
+        if (!e.isIntersecting && e.boundingClientRect.top > 0) { el.classList.add('rv'); continue; }
+        io.unobserve(el); continue;
+      }
+      if (e.isIntersecting) { el.classList.add('in'); io.unobserve(el); }
+    }
+  }, { rootMargin: '0px 0px -8% 0px' });
+  // Siblings in a row arrive one after another.
+  for (const q of ['.marks li', '.stats > div', '.stack > div', '.row']) document.querySelectorAll(q).forEach((el, i, all) => { const sib = [...el.parentNode.children].indexOf(el); el.style.setProperty('--d', `${Math.min(sib, 5) * 70}ms`); });
+  els.forEach(el => io.observe(el));
+}
+
+/* Press marks: hovering or focusing one names what it is, in a quiet line under the row. */
+{
+  const note = document.querySelector('.marks-note');
+  let hideT = 0;
+  for (const a of document.querySelectorAll('.marks a')) {
+    const show = () => { clearTimeout(hideT); note.textContent = a.dataset.note; note.classList.add('on'); };
+    const hide = () => { clearTimeout(hideT); hideT = setTimeout(() => note.classList.remove('on'), 140); };
+    a.addEventListener('mouseenter', show); a.addEventListener('focus', show);
+    a.addEventListener('mouseleave', hide); a.addEventListener('blur', hide);
+  }
+}
+
+/* Email: shown and copied by script (not in the markup, so it is not scraped). Falls back to mailto. */
+{
+  const btn = $('email'), live = $('email-live'), addr = ['cyrus.behr', 'gmail.com'].join('@');
+  btn.querySelector('.email-t').textContent = addr; btn.title = 'Copy email address'; btn.hidden = false;
+  let t = 0;
+  btn.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(addr); } catch (e) { location.href = `mailto:${addr}`; return; }
+    btn.classList.add('copied'); live.textContent = 'Email address copied.';
+    clearTimeout(t); t = setTimeout(() => { btn.classList.remove('copied'); live.textContent = ''; }, 1800);
+  });
+}
+
 /* Hero terrain, with one line of live data under it: where the car is, or the point under the cursor */
 const readout = $('readout');
 const REST = readout.textContent;
