@@ -97,9 +97,10 @@ const loadExhibit = () => {
   const s = document.createElement('script'); s.src = 'assets/js/localize.js'; s.onload = initExhibit; document.head.appendChild(s);
 };
 (function waitHero(t0) {
-  if (terrain.stats.ready || terrain.stats.error || performance.now() - t0 > 3000) { setTimeout(loadExhibit, 200); return; }
-  setTimeout(() => waitHero(t0), 100);
+  if (terrain.stats.ready || terrain.stats.error || performance.now() - t0 > 3000) { loadExhibit(); return; }
+  setTimeout(() => waitHero(t0), 50);
 })(performance.now());
+addEventListener('scroll', loadExhibit, { once: true, passive: true });   // a reader heading down gets it sooner
 function initExhibit() {
 const frame = $('pf'), bar = $('pf-bar'), pct = $('pf-pct'), live = $('pf-live');
 if (matchMedia('(pointer: coarse)').matches) $('pf-hint').textContent = 'Tap the map to move the car.';
