@@ -54,18 +54,6 @@ if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObse
   }
 }
 
-/* Email: shown and copied by script (not in the markup, so it is not scraped). Falls back to mailto. */
-{
-  const btn = $('email'), live = $('email-live'), addr = ['cyrus.behr', 'gmail.com'].join('@');
-  btn.querySelector('.email-t').textContent = addr; btn.title = 'Copy email address'; btn.setAttribute('aria-label', `Copy email address, ${addr}`); btn.hidden = false;
-  let t = 0;
-  btn.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(addr); } catch (e) { location.href = `mailto:${addr}`; return; }
-    btn.classList.add('copied'); live.textContent = 'Email address copied.';
-    clearTimeout(t); t = setTimeout(() => { btn.classList.remove('copied'); live.textContent = ''; }, 1800);
-  });
-}
-
 /* Hero terrain, with one line of live data under it: where the car is, or the point under the cursor */
 const readout = $('readout');
 const REST = readout.textContent;
@@ -114,26 +102,15 @@ const spoken = e => {
   if (lock) return `Car located in ${lock[1]} seconds.`;
   if (/moved the car/i.test(e)) return 'Car moved. Searching again.';
   if (/lock lost/i.test(e)) return 'Lock lost. Searching again.';
-  if (/GPS jammed/.test(e)) return 'GPS jammed, then spoofed away from the car. The estimate stays on the car.';
-  if (/GPS restored/.test(e)) return 'GPS restored.';
   return 'Searching for the car.';
 };
-// Jam GPS: the button follows the demo's GPS state, and pulses once to invite a press when the car is first found.
-const jam = $('pf-jam'), jamT = jam.querySelector('.jam-t');
-let jammed = false, invited = false;
-const setJamUi = on => { if (on === jammed) return; jammed = on; jam.dataset.jammed = String(on); jamT.textContent = on ? 'Restore GPS' : 'Jam GPS'; };
 const pf = window.Localize.create(frame, {
   onStatus: s => {
     const locked = s.state === 'Locked', p = Math.round((locked ? 1 : s.frac) * 100);
     if (p !== lastPct) { lastPct = p; bar.style.width = `${p}%`; pct.textContent = `${p}%`; }
     if (s.eventN !== lastEventN) { lastEventN = s.eventN; announce(spoken(s.event)); }
-    setJamUi(s.gps.mode === 1 || s.gps.mode === 2);
-    if (!invited && s.lockT != null && !jammed) { invited = true; jam.classList.add('invite'); }
   },
 });
-jam.addEventListener('click', () => pf.jam(!jammed));
-jam.addEventListener('animationend', () => jam.classList.remove('invite'));
-jam.disabled = false;
 // Keyboard users move the car with Enter or Space (held keys do not repeat). Screen readers activate the
 // frame with a synthesized click on the frame itself; real pointer clicks land on the canvas inside it.
 frame.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); pf.dropRandom(); } });
