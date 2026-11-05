@@ -334,15 +334,31 @@ async function fetchOk(url) {
   return r;
 }
 // Terrarium-encoded image to elevation (m) and water (0 or 1).
-async function decodeDem(blob) {
+// strips > 1 reads the pixels back a band at a time, one band per frame, so a large file never stalls the animation.
+async function decodeDem(blob, strips = 1) {
   const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const w = bmp.width, h = bmp.height, c = document.createElement('canvas'); c.width = w; c.height = h;
-  const cx = c.getContext('2d', { willReadFrequently: true }); cx.drawImage(bmp, 0, 0);
-  const px = cx.getImageData(0, 0, w, h).data; bmp.close();
-  const elev = new Float32Array(w * h), water = new Uint8Array(w * h);
-  for (let i = 0, j = 0; i < w * h; i++, j += 4) {
-    // Terrarium encoding: h = R*256 + G + B/256 - 32768. The lowest blue bit carries the water mask.
-    const b = px[j + 2]; elev[i] = px[j] * 256 + px[j + 1] + (b & 254) / 256 - 32768; water[i] = b & 1;
+  const cx = c.getContext('2d', { willReadFrequently: true }); cx.drawImage(bmp, 0, 0); bmp.close();
+  const elev = new Float32Array(w * h), water = new Uint8Array(w * h), rows = Math.ceil(h / strips);
+  for (let y0 = 0; y0 < h; y0 += rows) {
+    if (y0) await nextFrame();
+    const n = Math.min(rows, h - y0), px = cx.getImageData(0, y0, w, n).data;
+    for (let i = y0 * w, j = 0, e = (y0 + n) * w; i < e; i++, j += 4) {
+      // Terrarium encoding: h = R*256 + G + B/256 - 32768. The lowest blue bit carries the water mask.
+      const b = px[j + 2]; elev[i] = px[j] * 256 + px[j + 1] + (b & 254) / 256 - 32768; water[i] = b & 1;
+    }
+  }
+  // Some privacy modes (Firefox's fingerprinting protection, Brave, Safari private browsing) add random noise to canvas
+  // read-back. A flipped low bit of red is a 256 m spike and a flipped blue bit a one-pixel lake or island, so isolated
+  // outliers are put back to their neighbours'. Real ground never jumps 100 m between neighbouring 16 m pixels.
+  for (let y0 = 1; y0 < h - 1; y0 += rows) {
+    if (strips > 1) await nextFrame();
+    for (let y = y0, ye = Math.min(h - 1, y0 + rows); y < ye; y++) for (let i = y * w + 1, ie = y * w + w - 1; i < ie; i++) {
+      const v = elev[i], l = elev[i - 1], r = elev[i + 1], u = elev[i - w], d = elev[i + w];
+      if (Math.abs(v - l) > 100 && Math.abs(v - r) > 100 && Math.abs(v - u) > 100 && Math.abs(v - d) > 100) elev[i] = (l + r + u + d) / 4;
+      const nw = water[i - 1] + water[i + 1] + water[i - w] + water[i + w];
+      if (nw === 0) water[i] = 0; else if (nw === 4) water[i] = 1;
+    }
   }
   return { w, h, elev, water };
 }
@@ -499,7 +515,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   }
 
   /* ---------- GL ---------- */
-  let gl = null, glLost = false, progT = null, progR = null, vaoT = null, vaoR = null, hBuf = null, nIdx = 0, nRIdx = 0, rIdxType = 0;
+  let gl = null, glLost = false, glGen = 0, progT = null, progR = null, vaoT = null, vaoR = null, hBuf = null, nIdx = 0, nRIdx = 0, rIdxType = 0;
   let texA = null, texB = null, roadsOn = false;
   const UT = {}, UR = {}, UC = {}, UD = {};
   let progC = null, progD = null, progQ = null, vaoC = null, vaoD = null, nCar = 0, carRT = null;
@@ -524,14 +540,15 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     gl.getExtension('KHR_parallel_shader_compile');
     progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); progC = compile(CAR_VS, CAR_FS); progD = compile(DECAL_VS, DECAL_FS); progQ = compile(COMP_VS, COMP_FS);
     // A GPU reset or driver switch loses the context: keep drawing the overlay, and rebuild when it returns.
-    cv.addEventListener('webglcontextlost', e => { e.preventDefault(); glLost = true; });
+    cv.addEventListener('webglcontextlost', e => { e.preventDefault(); glLost = true; glGen++; });
     cv.addEventListener('webglcontextrestored', () => {
       progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); progC = compile(CAR_VS, CAR_FS); progD = compile(DECAL_VS, DECAL_FS); progQ = compile(COMP_VS, COMP_FS);
       vaoR = null; roadsOn = false; ib = null; carRT = null;
       // Lost before the first data was in: load() sets up the new context when the data arrives.
       if (!pre) { glLost = false; return; }
+      glLost = false;   // before rebuilding: buildRoads() skips its work while the context is marked lost
       setupGL(); if (elev) { texB = makeTex(EW, EH, elev, water); uploadGridH(); } if (roads.length) buildRoads();
-      glLost = false; if (ready) draw(performance.now(), true);
+      if (ready) draw(performance.now(), true);
     });
   }
   function makeTex(w, h, e, wa) {
@@ -542,6 +559,23 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, w, h, 0, gl.RG, gl.FLOAT, data);
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     return tx;
+  }
+  // The same texture uploaded a band of rows per frame. Resolves to null if the context was lost on the way (the
+  // restore handler rebuilds the textures itself).
+  async function makeTexStrips(w, h, e, wa, strips) {
+    const gen = glGen, tx = gl.createTexture(), rows = Math.ceil(h / strips), buf = new Float32Array(w * rows * 2);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, tx);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RG32F, w, h);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    for (let y0 = 0; y0 < h; y0 += rows) {
+      if (glLost || gen !== glGen) return null;
+      const n = Math.min(rows, h - y0), data = n === rows ? buf : buf.subarray(0, w * n * 2);
+      for (let i = 0, k = y0 * w; i < w * n; i++, k++) { data[i * 2] = e[k]; data[i * 2 + 1] = wa[k]; }
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, tx); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, w, n, gl.RG, gl.FLOAT, data);
+      await nextFrame();
+    }
+    return glLost || gen !== glGen ? null : tx;
   }
   let pre = null;   // preview data, kept for a context restore
   function setupGL() {
@@ -578,31 +612,32 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   // triangle strip per row with primitive restart, rows emitted south to north, nearest first for the views used
   // here, so the depth test rejects most hidden fragments before they are shaded.
   let ib = null, meshBox = null;
-  // The draw-in's elevation schedule: levels at evenly spaced fractions of what the resting view shows (by screen area,
-  // fading with the fog), so the front spends its time where there are lines to draw rather than on hidden peaks.
+  // The draw-in's elevation schedule: levels at evenly spaced fractions of the ground where the resting view shows minor
+  // contours (by screen area, fading out with them in the distance), so the fill keeps pace with what is on screen and
+  // ends as the last visible line arrives, rather than climbing through peaks nobody can see.
   const sweep = { q: null };
   function sweepTable() {
     const save = { ...cam, VP: cam.VP.slice() }, zk0 = zk, P = [0, 0, 0], hist = new Float64Array(1024);
     zk = pose.ex / DEM.mpp;
     setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy);
-    const [i0, j0, i1, j1] = meshBox, F0 = pose.D * pose.fog0, F1 = pose.D * pose.fog1;
+    const [i0, j0, i1, j1] = meshBox, F0 = pose.D * pose.mf0, F1 = pose.D * pose.mf1;
     let tot = 0, top = 0;
-    for (let j = j0; j <= j1; j += 2) for (let i = i0; i <= i1; i += 2) {
+    for (let j = j0; j <= j1; j += 4) for (let i = i0; i <= i1; i += 4) {
       const x = i * GS + GS / 2, y = j * GS + GS / 2, h = gA[j * GW + i], b = clamp(Math.round(h), 0, 1023);
-      top = Math.max(top, b);
       if (pre.water[clamp(y / PK | 0, 0, pre.h - 1) * pre.w + clamp(x / PK | 0, 0, pre.w - 1)]) continue;
       project(x, y, h, P);
       if (P[2] <= 0 || P[0] < 0 || P[0] > vw || P[1] < 0 || P[1] > vh) continue;
       const dist = Math.hypot(x - cam.eye[0], -y - cam.eye[1], (h - H0) * zk - cam.eye[2]);
       const wgt = (1 - clamp((dist - F0) / (F1 - F0), 0, 1)) / (P[2] * P[2]);
-      hist[b] += wgt; tot += wgt;
+      if (wgt > 0) { hist[b] += wgt; tot += wgt; top = Math.max(top, b); }
     }
     zk = zk0; cam.VP.set(save.VP); Object.assign(cam, { ...save, VP: cam.VP });
     if (!tot) return null;
-    // 25 levels from the lowest visible ground to the 99.5th percentile, then on past the highest peak in the data.
+    // 25 levels from the lowest visible ground to the 99.5th percentile, then on past the highest visible ground (with
+    // room for peaks between the samples, so nothing is still hidden when the draw-in switches off).
     const q = []; let c = 0, v = 0;
     for (let k = 0; k <= 24; k++) { const want = tot * (.002 + k / 24 * .993); while (v < 1023 && c + hist[v] < want) c += hist[v++]; q.push(v); }
-    q.push(Math.max(q[24], top) + 31);
+    q.push(Math.max(q[24], top) + 45);
     stats.sweep = q.slice();
     return q;
   }
@@ -611,7 +646,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
     zk = pose.ex / DEM.mpp;
     const tz = (meshH(pose.tx, pose.ty) - H0) * zk, zTop = (370 - H0) * zk;
-    for (const [th, dd, dp, dt] of [[.3, 1.16, -10, 0], [.65, 1.08, -5, 0], [1, 1, 0, 0], [1, 1, -12, 3], [1, 1, 12, -3], [1, 1, 0, 8]]) {
+    for (const [th, dd, dp, dt] of [[.3, 1.16, -12, 0], [.65, 1.08, -6, 0], [1, 1, 0, 0], [1, 1, -12, 3], [1, 1, 12, -3], [1, 1, 0, 8]]) {
       setCamera(pose.tx, pose.ty, tz * (th > .5 ? 1 : 0), pose.psi + dp * DEG, pose.theta * th + dt * DEG, pose.D * dd, pose.fov, pose.sx, pose.sy);
       for (let k = 0; k <= 16; k++) for (const [nx, ny] of [[k / 8 - 1, -1], [k / 8 - 1, 1], [-1, k / 8 - 1], [1, k / 8 - 1]]) {
         const ax = (nx - cam.sx) / cam.P00, ay = (ny - cam.sy) / cam.P11, { r, u, d, eye } = cam;
@@ -635,7 +670,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     for (let j = j1 - 1; j >= j0; j--) { for (let i = i0; i <= i1; i++) { idx[n++] = j * GW + i; idx[n++] = (j + 1) * GW + i; } idx[n++] = 0xFFFFFFFF; }
     nIdx = n;
     // The draw-in climbs through the elevations the view actually shows (fixed once, so a resize mid-reveal does not jump it).
-    if (!sweep.q) sweep.q = sweepTable();
+    if (sweep.q === null) sweep.q = sweepTable() || false;   // false: no schedule (an empty view), so no draw-in; never retried mid-reveal
     gl.bindVertexArray(vaoT); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW); gl.bindVertexArray(null);
     stats.mesh = { box: meshBox, tris: n };
   }
@@ -809,7 +844,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     octx.restore();
   }
   const places = (labels || []).map(l => { const p = l.lat == null ? { ...l } : { ...l, ...(([x, y]) => ({ x, y }))(ll2px(l.lat, l.lon)) }; p.a = 0; return p; });
-  let fontsOk = !document.fonts, labelsA = 0, carA = 0, carVis = 1, heading = 0, headingInit = false, lensA = 0;
+  let fontsOk = !document.fonts, labelsA = 0, carA = 0, carVis = 1, heading = 0, headingInit = false, lensA = 0, carPlaced = false;
   if (document.fonts) document.fonts.ready.then(() => { fontsOk = true; if (reduce && ready) draw(performance.now(), true); });
   // The car arrives where it used to be 20 s into its drive, which puts it front and centre in the framing.
   const D0 = SPEED * (20 - REVEAL * CAR_IN / 1000);
@@ -838,7 +873,8 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     if (!headingInit) { heading = target; headingInit = true; }
     let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .05));
     car.ok = true; car.x = CAR[0]; car.y = CAR[1]; car.h = ch; car.d = d; car.a = carA * carVis;
-    if (gl && carA > .001) carFrame(k);   // nothing to place before it starts to arrive
+    // Nothing to place before it starts to arrive; its first pose is set outright, so it never fades in level on a slope.
+    if (gl && carA > .001) { carFrame(carPlaced ? k : 1); carPlaced = true; }
   }
   // Model matrix: the car sits on the surface, pitched and rolled with the slope under it (smoothed), at a constant
   // size on screen like a map marker.
@@ -1247,7 +1283,9 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       await nextFrame();
     }
     const roadsP = loadScript(ROADS.url, 'TerrainRoads').catch(err => { console.error('Roads failed to load', err); return null; });
-    const fullP = (location.protocol === 'file:' ? Promise.reject(new Error('file://: full elevation needs a server')) : fetchOk(DEM.url)).then(r => r.blob()).then(decodeDem);
+    // After the first frame, everything heavy is spread over frames (one step, or one band of rows, per frame), so the
+    // full data lands without a stutter in the opening.
+    const fullP = (location.protocol === 'file:' ? Promise.reject(new Error('file://: full elevation needs a server')) : fetchOk(DEM.url)).then(r => r.blob()).then(b => decodeDem(b, gl && pre ? 8 : 1));
     fullP.catch(() => {});
     roadsP.then(data => {
       if (!data) return;
@@ -1273,7 +1311,10 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
         ready = true; cv.classList.add('on'); stats.ready = true; if (reduce) draw(performance.now(), true); else start();
       }
       setGridFromFull(full); warmTilt();
-      if (!glLost) { texB = makeTex(EW, EH, elev, water); gl.bindVertexArray(null); uploadGridH(); }
+      await nextFrame();
+      if (!glLost) { gl.bindVertexArray(null); uploadGridH(); }
+      await nextFrame();
+      if (!glLost) { const tx = await makeTexStrips(EW, EH, elev, water, 8); if (tx) texB = tx; }
       if (roads.length) buildRoads();
       mixT = performance.now(); if (reduce) { mixV = 1; draw(performance.now(), true); }
     } else {
@@ -1307,7 +1348,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     // Debug: put the camera at the resting pose (no drift, pointer or scroll), for checking the composition.
     carState: () => ({ a: car.a, d: car.d, h: heading, up: car.up.slice(), f: car.f.slice(), l: car.l.slice() }),
     // Debug: the car's pitch and roll (degrees) every DEM px around the loop, at the current relief.
-    tiltProfile: () => { const o = []; for (let d = 0; d < path.len; d++) { slopesAt(d, SL); o.push([d, pitchOf(Math.atan(SL[0] * zk)) / DEG, ROLL_MAX * Math.tanh(Math.atan(SL[1] * zk) * ROLL_K / ROLL_MAX) / DEG]); } return o; },
+    tiltProfile: () => { const o = []; if (!gA || path.n < 2) return o; for (let d = 0; d < path.len; d++) { slopesAt(d, SL); o.push([d, pitchOf(Math.atan(SL[0] * zk)) / DEG, ROLL_MAX * Math.tanh(Math.atan(SL[1] * zk) * ROLL_K / ROLL_MAX) / DEG]); } return o; },
     seekCar: d => { dSeek += d - car.d; },
     carScreen: () => car.ok ? project(car.x, car.y, car.h, [0, 0, 0]).slice(0, 2).map(Math.round) : null,
     rest: () => { zk = pose.ex / DEM.mpp; setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy); } };

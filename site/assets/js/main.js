@@ -11,13 +11,26 @@ $('year').textContent = String(new Date().getFullYear());
 {
   const pill = $('pill'), links = [...pill.querySelectorAll('a[href^="#"]:not(.pill-brand)')];
   new IntersectionObserver(([e]) => { const on = !e.isIntersecting; pill.classList.toggle('show', on); pill.inert = !on; }, { rootMargin: '-30% 0px 0px 0px' }).observe($('top'));
-  const seen = new Map();
-  const io = new IntersectionObserver(es => {
-    for (const e of es) seen.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
-    let best = '', r = 0; for (const [id, v] of seen) if (v > r) { r = v; best = id; }
-    for (const a of links) a.setAttribute('aria-current', String(a.getAttribute('href') === `#${best}`));
-  }, { threshold: [0, .15, .3, .5, .75, 1], rootMargin: '-40% 0px -40% 0px' });
-  for (const a of links) { const t = document.querySelector(a.getAttribute('href')); if (t) io.observe(t); }
+  // The current section is the one a nav link was just used to reach (while it stays on screen); otherwise the last
+  // one whose top has passed the middle of the screen, or the last of all once the page is scrolled to the end (a
+  // short closing section never reaches the middle on a tall screen).
+  const secs = links.map(a => document.querySelector(a.getAttribute('href')));
+  let pend = 0, pin = null, pinSeen = false;
+  const mark = () => {
+    pend = 0;
+    if (pin) { const r = pin.getBoundingClientRect(), on = r.top < innerHeight && r.bottom > 0; if (on) pinSeen = true; else if (pinSeen) pin = null; }
+    const end = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
+    let best = pin || (end ? secs[secs.length - 1] : null);
+    if (!best) for (const s of secs) if (s && s.getBoundingClientRect().top <= innerHeight / 2) best = s;
+    for (const a of links) a.setAttribute('aria-current', String(!!best && a.getAttribute('href') === `#${best.id}`));
+  };
+  const queue = () => { pend = pend || requestAnimationFrame(mark); };
+  addEventListener('scroll', queue, { passive: true }); addEventListener('resize', queue);
+  document.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[href^="#"]'), s = a && secs.find(x => x && `#${x.id}` === a.getAttribute('href'));
+    if (s) { pin = s; pinSeen = false; queue(); }
+  });
+  mark();
 }
 
 /* Reveal on scroll: below-the-fold blocks rise in once as they arrive. Anything already on screen is left alone. */
@@ -59,7 +72,8 @@ const readout = $('readout');
 const REST = readout.textContent;
 let lastKind = '';
 const deg = (v, pos, neg) => `${Math.abs(v).toFixed(4)}\u00b0\u202f${v >= 0 ? pos : neg}`;
-const terrain = window.Terrain.init({
+// If terrain.js did not load (a network error or a blocker), the rest of the page still works.
+const terrain = !window.Terrain ? { stats: { error: 'terrain.js missing' } } : window.Terrain.init({
   hero: $('top'), canvas: $('terrain'), overlay: $('terrain-ov'),
   // The drive loop is framed to stay clear of these.
   avoid: ['.eyebrow', '.hero h1', '.lede', '.nav', '.hero-foot'].map(q => document.querySelector(q)),
