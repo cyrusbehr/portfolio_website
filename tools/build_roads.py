@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild site/assets/data/austin-roads.v1.js from OpenStreetMap.
+"""Rebuild the roads file and the hero car's loop from OpenStreetMap. Run tools/fix_route.py on the output afterwards.
 
 Downloads drivable roads for the hero's map window from the Overpass API, keeps the tertiary and
 larger classes for drawing, and solves the car's loop on the real road graph: a shortest-cost

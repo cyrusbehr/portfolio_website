@@ -9,7 +9,7 @@
 
 // DEM: z13 Web Mercator mosaic in Terrarium encoding (lossless WebP), top-left at tile (tx0, ty0).
 const DEM = { url: 'assets/data/austin-dem.v1.webp', z: 13, tx0: 1866.46875, ty0: 3369.0, mpp: 16.494 };
-const ROADS = { url: 'assets/data/austin-roads.v1.js' };   // a script that sets window.TerrainRoads (works from file://)
+const ROADS = { url: 'assets/data/austin-roads.v2.js' };   // a script that sets window.TerrainRoads (works from file://)
 const TILES = 2 ** DEM.z;
 const MINOR = 20, MAJOR = 100;   // contour interval and index interval, m
 const PK = 4;                    // preview resolution divisor
@@ -20,7 +20,7 @@ const REVEAL = 2800;             // ms for the flat map to tilt into 3D while th
 const DEG = Math.PI / 180;
 // The drive loop's outline (every 4th point of the route in the roads file), DEM px. The hero frames itself around
 // it before the roads file arrives, so the camera never re-frames mid-reveal. Regenerate if the route changes.
-const LOOP_PTS = [1290,505,1274,721,1268,792,1236,852,1198,924,1214,898,1226,912,1216,901,1194,896,1133,806,1171,783,1180,762,1194,735,1206,723,1211,703,1223,669,1207,653,1182,641,1189,596,1203,595,1216,581,1227,568,1232,553,1245,536,1263,527,1284,495];
+const LOOP_PTS = [1290,505,1274,721,1268,792,1236,852,1211,903,1206,901,1185,888,1128,774,1174,778,1192,740,1198,730,1208,717,1219,691,1215,650,1195,654,1192,608,1194,590,1212,588,1221,579,1229,559,1240,549,1251,532,1274,508,1290,502];
 const LOOP = { x0: 1128, x1: 1291, y0: 495, y1: 924 };
 const ll2px = (lat, lon) => {
   const tx = (lon + 180) / 360 * TILES, lr = lat * Math.PI / 180;
@@ -618,6 +618,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     let len = 0;
     for (let i = 0; i < n; i++) { route.x[i] = R[i * 2]; route.y[i] = R[i * 2 + 1]; if (i) len += Math.hypot(route.x[i] - route.x[i - 1], route.y[i] - route.y[i - 1]); route.cum[i] = len; }
     route.len = len;
+    buildPath();
   }
   // Each polyline is cut into pieces of at most 3 DEM px, so the straight pieces follow the folds of the mesh.
   function buildRoads() {
@@ -654,6 +655,32 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     gl.bindVertexArray(null);
     nRIdx = P * 6; rIdxType = idx instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT; roadsOn = true;
   }
+  // The car drives the loop rounded at its corners, as a real car would: the route resampled every half pixel and
+  // smoothed along the loop. Its trail follows the same path, and its heading is the path's own direction, so every
+  // turn is continuous (no snapping at a corner).
+  const path = { x: null, y: null, cum: null, n: 0, len: 0 };
+  function buildPath() {
+    const step = .5, n = Math.max(8, Math.floor(route.len / step)), xs = new Float64Array(n), ys = new Float64Array(n);
+    for (let i = 0; i < n; i++) { routeAt(i * route.len / n, A); xs[i] = A[0]; ys[i] = A[1]; }
+    const sig = 2.5 / step, R = Math.ceil(sig * 3), w = new Float64Array(2 * R + 1); let ws = 0;
+    for (let k = -R; k <= R; k++) { w[k + R] = Math.exp(-.5 * (k / sig) ** 2); ws += w[k + R]; }
+    path.x = new Float32Array(n + 1); path.y = new Float32Array(n + 1); path.cum = new Float32Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      let ax = 0, ay = 0;
+      for (let k = -R; k <= R; k++) { const j = (i + k + n) % n; ax += xs[j] * w[k + R]; ay += ys[j] * w[k + R]; }
+      path.x[i] = ax / ws; path.y[i] = ay / ws;
+    }
+    path.x[n] = path.x[0]; path.y[n] = path.y[0];
+    let len = 0; for (let i = 1; i <= n; i++) { len += Math.hypot(path.x[i] - path.x[i - 1], path.y[i] - path.y[i - 1]); path.cum[i] = len; }
+    path.n = n + 1; path.len = len;
+  }
+  const pathAt = (d, out) => {
+    d = ((d % path.len) + path.len) % path.len;
+    let lo = 0, hi = path.n - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (path.cum[m] < d) lo = m + 1; else hi = m; }
+    const i = Math.max(1, lo), a = path.cum[i - 1], b = path.cum[i], f = b > a ? (d - a) / (b - a) : 0;
+    out[0] = path.x[i - 1] + (path.x[i] - path.x[i - 1]) * f; out[1] = path.y[i - 1] + (path.y[i] - path.y[i - 1]) * f;
+  };
   const routeAt = (d, out) => {
     d = ((d % route.len) + route.len) % route.len;
     let lo = 0, hi = route.n - 1;
@@ -664,6 +691,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
 
   /* ---------- Overlay: labels, the car and its trail, the cursor ring ---------- */
   const SPEED = 10.5;                      // DEM px per second, about 170 m/s: one lap takes about 100 s
+  const carS = [0, 0, 0];
   const TRAIL = 150, CAR = new Float32Array(2), A = new Float32Array(2), B = new Float32Array(2), S = [0, 0, 0], S2 = [0, 0, 0], S3 = [0, 0, 0];
   const beam = document.createElement('canvas'); beam.width = 96; beam.height = 48;
   { const g = beam.getContext('2d'), rg = g.createRadialGradient(0, 24, 0, 0, 24, 96); rg.addColorStop(0, 'rgba(255,236,214,.34)'); rg.addColorStop(1, 'rgba(255,236,214,0)'); g.fillStyle = rg; g.beginPath(); g.moveTo(0, 18); g.lineTo(96, 0); g.lineTo(96, 48); g.lineTo(0, 30); g.closePath(); g.fill(); }
@@ -705,13 +733,13 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     // The car arrives once the land has settled (and its roads are in), never during the tilt.
     carA += ((roadsT >= 0 && (reduce || age > REVEAL * .62) ? 1 : 0) - carA) * (reduce ? 1 : 1 - Math.exp(-dt / .45));
     const d = carDist(t);
-    routeAt(d, CAR);
+    pathAt(d, CAR);
     const ch = gl ? meshH(CAR[0], CAR[1]) : 0;
     carVis += ((!gl || visible(CAR[0], CAR[1], ch + 1.5) ? 1 : 0) - carVis) * k;
-    routeAt(d + 3, A); routeAt(d - 3, B);
+    pathAt(d + .75, A); pathAt(d - .75, B);
     const target = Math.atan2(A[1] - B[1], A[0] - B[0]);
     if (!headingInit) { heading = target; headingInit = true; }
-    let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .06));
+    let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .05));
     car.ok = true; car.x = CAR[0]; car.y = CAR[1]; car.h = ch; car.d = d; car.a = carA * carVis;
     if (gl) carFrame(k);
   }
@@ -726,9 +754,12 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const pl = [X + hy * wl, Y + hx * wl, zAt(car.x + hy * wl, car.y - hx * wl)], pr = [X - hy * wl, Y - hx * wl, zAt(car.x - hy * wl, car.y + hx * wl)];
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], nrm = a => { const L = Math.hypot(...a) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
     const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    const up = nrm(cross(nrm(sub(pf, pb)), nrm(sub(pl, pr))));
+    // The relief is drawn six times taller than life, so the car only follows part of it: a gentle pitch on climbs
+    // and descents, and just a hint of side-to-side roll.
+    const sF = clamp((pf[2] - pb[2]) / (2 * fl) * .35, -.12, .12), sL = clamp((pl[2] - pr[2]) / (2 * wl) * .1, -.045, .045);
+    const up = nrm(cross(nrm([hx, -hy, sF]), nrm([hy, hx, sL])));
     car.up = nrm([car.up[0] + (up[0] - car.up[0]) * k, car.up[1] + (up[1] - car.up[1]) * k, car.up[2] + (up[2] - car.up[2]) * k]);
-    const u = car.up, f0 = [hx, -hy, (pf[2] - pb[2]) / (2 * fl)], fd = f0[0] * u[0] + f0[1] * u[1] + f0[2] * u[2];
+    const u = car.up, f0 = [hx, -hy, sF], fd = f0[0] * u[0] + f0[1] * u[1] + f0[2] * u[2];
     const f = nrm([f0[0] - u[0] * fd, f0[1] - u[1] * fd, f0[2] - u[2] * fd]), l = cross(u, f);
     // Rest on the highest of the five ground points, so no corner sinks into the hillside.
     const zc = Math.max(Z, (pf[2] + pb[2] + pl[2] + pr[2]) / 4) + Lw * .02;
@@ -766,13 +797,16 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const age = t0 < 0 ? 0 : t - t0, k = reduce ? 1 : 1 - Math.exp(-dt / .25);
     // Labels arrive once the land has settled (and the web font is in, so they never swap typeface).
     labelsA += ((fontsOk && (reduce || age > REVEAL * .75) ? 1 : 0) - labelsA) * (reduce ? 1 : 1 - Math.exp(-dt / .5));
+    if (car.ok) project(car.x, car.y, car.h, carS);
     if (labelsA > .01) for (const l of places) {
       project(l.x, l.y, gl ? meshH(l.x, l.y) : 0, S);
       if (S[2] <= 0 || S[0] < -150 || S[1] < -40 || S[0] > vw + 150 || S[1] > vh + 40) continue;
       // Labels give way to the copy, and to ridges in front of them.
       octx.font = `${l.water ? 'italic ' : ''}400 12px "Schibsted Grotesk", sans-serif`;
       const tw = octx.measureText(l.label || l.name).width, onCopy = hit(S[0] - tw / 2 - 10, S[1]) || hit(S[0] + tw / 2 + 10, S[1]) || hit(S[0] + tw + 10, S[1]);
-      l.a += ((onCopy || (gl && !visible(l.x, l.y, meshH(l.x, l.y) + 4)) ? 0 : 1) - l.a) * k;
+      // ...and to the car as it drives past (labels sit above the 3D layer).
+      const x0 = l.water ? S[0] - tw / 2 : S[0], nearCar = car.ok && car.a > .1 && carS[0] > x0 - 40 && carS[0] < x0 + tw + 40 && Math.abs(carS[1] - S[1]) < 34;
+      l.a += ((onCopy || nearCar || (gl && !visible(l.x, l.y, meshH(l.x, l.y) + 4)) ? 0 : 1) - l.a) * k;
       const a = labelsA * l.a; if (a < .01) continue;
       octx.globalAlpha = a;
       if (l.water) {
@@ -802,7 +836,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       let lvl = -1, lx = 0, ly = 0, first = true;
       for (let q = d - TRAIL; ; q += 1) {
         const last = q >= end; if (last) q = end;
-        routeAt(q, A); project(A[0], A[1], gl ? meshH(A[0], A[1]) + .5 : 0, S);
+        pathAt(q, A); project(A[0], A[1], gl ? meshH(A[0], A[1]) + .5 : 0, S);
         if (first) { lx = S[0]; ly = S[1]; first = false; if (!last) continue; }
         const al = Math.round(217 * a * Math.pow(1 - (d - q) / TRAIL, 1.6));   // 217/255 = 0.85 at the car
         if (al !== lvl) { if (lvl > 0) octx.stroke(); lvl = al; octx.beginPath(); octx.moveTo(lx, ly); octx.strokeStyle = `rgba(255,122,69,${(al / 255).toFixed(4)})`; }
@@ -896,7 +930,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   }
 
   /* ---------- Frame ---------- */
-  let raf = 0, visibleHero = true, lastGl = -1e9, lastOv = -1e9, lastRead = 0, slow = 0, lastT = 0, lastDt = 0, fadeV = 0, ready = false, glEvery = 0;
+  let raf = 0, visibleHero = true, lastRead = 0, slow = 0, lastDt = 0, fadeV = 0, ready = false;
   let touch = false, readShown = '';
   let sized = '';
   function resize() {
@@ -917,8 +951,9 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const age = t0 < 0 ? 0 : t - t0;
     fadeV = reduce ? 1 : smoother(age / 700);
     gl.viewport(0, 0, cv.width, cv.height);
+    gl.depthMask(true);   // before the clear, which skips depth while writes are off (the previous frame ends with them off)
     gl.clearColor(.043, .047, .047, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND);
     gl.useProgram(progT); gl.bindVertexArray(vaoT);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texA); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texB);
     gl.uniform1i(UT.uDemA, 0); gl.uniform1i(UT.uDemB, 1); gl.uniform1i(UT.uGW, GW);
@@ -961,8 +996,11 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
         const sx = W / size, sy = H / size, tx = (W - 2 * cx) / size, ty = (H - 2 * cy) / size, m = cam.VP;
         for (let c = 0; c < 4; c++) { carVP[c * 4] = m[c * 4] * sx + m[c * 4 + 3] * tx; carVP[c * 4 + 1] = m[c * 4 + 1] * sy + m[c * 4 + 3] * ty; carVP[c * 4 + 2] = m[c * 4 + 2]; carVP[c * 4 + 3] = m[c * 4 + 3]; }
         gl.bindFramebuffer(gl.FRAMEBUFFER, rt.ms); gl.viewport(0, 0, size, size);
+        // Depth writes must be on before the clear: gl.clear leaves depth untouched while depthMask is false (as the
+        // decal pass leaves it), and the car would then be tested against its own previous frame.
+        gl.depthMask(true); gl.colorMask(true, true, true, true);
         gl.clearColor(0, 0, 0, 0); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true); gl.disable(gl.BLEND);
+        gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND);
         gl.useProgram(progC); gl.bindVertexArray(vaoC);
         gl.uniformMatrix4fv(UC.uVP, false, carVP); gl.uniformMatrix4fv(UC.uM, false, car.M);
         { const a = pose.psi + pose.sun * DEG, el = pose.sunEl * DEG; gl.uniform3f(UC.uLight, Math.sin(a) * Math.cos(el), -Math.cos(a) * Math.cos(el), Math.sin(el)); }
@@ -988,13 +1026,14 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     if (gl) {
       updateCamera(t);
       updateCar(t, dt);
-      if (once || t - lastGl >= glEvery) { lastGl = t; if (!glLost) drawGL(t); stats.frames++; }
+      if (!glLost) drawGL(t);
+      stats.frames++;
     } else if (fbMap) {
       fadeV = reduce ? 1 : Math.min(1, fadeV + dt / .7);
       updateCar(t, dt);
       drawFallback(); stats.frames++;
     }
-    if (once || t - lastOv > 11) { lastOv = t; drawOverlay(t, dt); }
+    drawOverlay(t, dt);
     if (onReadout && (once || t - lastRead > 200)) { lastRead = t; readout(t); }
   }
   // One line of live data under the hero: the car's position and elevation, or the point under the cursor.
@@ -1004,23 +1043,43 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       const p = gl ? pick(mouse.x, mouse.y) : [fv.x + (mouse.x - vw / 2) / fv.s, fv.y + (mouse.y - vh / 2) / fv.s];
       if (p && p[0] >= 0 && p[1] >= 0 && p[0] < EW && p[1] < EH) { const [lat, lon] = px2ll(p[0], p[1]); r = { kind: 'cursor', lat, lon, m: sampleElev(p[0], p[1]), water: isWater(p[0], p[1]) }; }
     }
-    if (!r && route.n > 1 && carA > .5) { routeAt(carDist(t), A); const [lat, lon] = px2ll(A[0], A[1]); r = { kind: 'car', lat, lon, m: sampleElev(A[0], A[1]) }; }
+    if (!r && route.n > 1 && carA > .5) { pathAt(carDist(t), A); const [lat, lon] = px2ll(A[0], A[1]); r = { kind: 'car', lat, lon, m: sampleElev(A[0], A[1]) }; }
     const key = r ? `${r.kind}${r.lat.toFixed(4)}${r.lon.toFixed(4)}${Math.round(r.m)}` : '';
     if (key !== readShown) { readShown = key; onReadout(r); }
   }
+  // Frame pacing. Terrain, roads, car and overlay are always drawn together, on the same frame. On a high-refresh
+  // screen (120 to 300 Hz) the hero draws on every n-th refresh, about 60 to 90 fps and evenly spaced, instead of
+  // asking the GPU for every refresh and getting uneven frames. The screen's refresh period is the shortest steady
+  // interval between animation frames, measured once at start. A device that still cannot keep up drops to 1x
+  // resolution, then to half rate.
+  let tick = 0, every = 1, slowEvery = 1, lastDraw = 0, refreshMs = 1000 / 60;
+  (function probe() {
+    const ds = []; let last = 0;
+    const f = t => {
+      if (last) ds.push(t - last);
+      last = t;
+      if (ds.length < 30) { requestAnimationFrame(f); return; }
+      ds.sort((a, b) => a - b);
+      refreshMs = Math.max(2, ds[Math.floor(ds.length * .2)]);
+      every = Math.max(1, Math.floor(1000 / refreshMs / 60 + .08));
+      stats.refreshHz = Math.round(1000 / refreshMs); stats.every = every;
+    };
+    requestAnimationFrame(f);
+  })();
   function loop(t) {
-    lastDt = lastT ? clamp((t - lastT) / 1000, .001, .1) : 1 / 60;
-    if (lastT) {
-      // A device that cannot keep up first drops to 1x resolution, then redraws the terrain at half rate.
-      slow = t - lastT > 26 ? slow + 1 : Math.max(0, slow - 1);
-      if (slow > 90) { slow = 0; if (dprCap > 1) { dprCap = 1; resize(); } else glEvery = 30; }
-    }
-    lastT = t;
-    if (t0 < 0) t0 = t;
-    draw(t, false);
     raf = (!reduce && visibleHero && !document.hidden) ? requestAnimationFrame(loop) : 0;
+    if (t0 < 0) t0 = t;
+    if (tick++ % (every * slowEvery)) return;
+    lastDt = lastDraw ? clamp((t - lastDraw) / 1000, .001, .1) : 1 / 60;
+    if (lastDraw) {
+      const late = t - lastDraw > Math.max(26, 1.7 * every * slowEvery * refreshMs);
+      slow = late ? slow + 1 : Math.max(0, slow - 1);
+      if (slow > 90) { slow = 0; if (dprCap > 1) { dprCap = 1; resize(); } else if (slowEvery === 1) slowEvery = 2; }
+    }
+    lastDraw = t;
+    draw(t, false);
   }
-  function start() { if (ready && !raf && !reduce && visibleHero && !document.hidden) { lastT = 0; raf = requestAnimationFrame(loop); } }
+  function start() { if (ready && !raf && !reduce && visibleHero && !document.hidden) { lastDraw = 0; raf = requestAnimationFrame(loop); } }
   addEventListener('scroll', () => { scrollP = clamp(scrollY / Math.max(1, vh), 0, 1); }, { passive: true });
   new IntersectionObserver(([e]) => { visibleHero = e.isIntersecting; start(); }).observe(hero);
   document.addEventListener('visibilitychange', start);
@@ -1142,6 +1201,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   });
   return { stats, cam, pose, route, sampleElev: (x, y) => sampleElev(x, y), ll2px, px2ll, pick, meshH, project: (x, y) => project(x, y, meshH(x, y), [0, 0, 0]),
     // Debug: put the camera at the resting pose (no drift, pointer or scroll), for checking the composition.
+    carState: () => ({ a: car.a, d: car.d, h: heading, up: car.up.slice(), f: car.f.slice(), l: car.l.slice() }),
     carScreen: () => car.ok ? project(car.x, car.y, car.h, [0, 0, 0]).slice(0, 2).map(Math.round) : null,
     rest: () => { zk = pose.ex / DEM.mpp; setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy); } };
 }
