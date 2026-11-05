@@ -201,6 +201,112 @@ void main() {
   o = vec4(.925, .918, .898, vA * c * uFade);
 }`;
 
+// The car: a small low-poly model in metres (x forward, y left, z up), placed on the surface through uM, lit by the
+// same sun as the terrain. Materials: 0 paint, 1 glass, 2 lamp (unlit), 3 tyre.
+const CAR_VS = `#version 300 es
+precision highp float;
+in vec3 aP; in vec3 aN; in vec4 aC;
+uniform mat4 uVP, uM;
+out vec3 vN; out vec3 vW; out vec4 vC;
+void main() {
+  vec4 w = uM * vec4(aP, 1.);
+  vN = mat3(uM) * aN; vW = w.xyz; vC = aC;
+  gl_Position = uVP * w;
+}`;
+const CAR_FS = `#version 300 es
+precision highp float;
+uniform vec3 uLight, uEye;
+in vec3 vN; in vec3 vW; in vec4 vC;
+out vec4 o;
+void main() {
+  vec3 N = normalize(vN), V = normalize(uEye - vW);
+  // Key light from the sun, a soft fill from the viewer's side (so the paint reads at every heading), sky ambient.
+  float dif = max(dot(N, uLight), 0.), sky = .55 + .45 * N.z, fill = max(dot(N, V), 0.);
+  vec3 c;
+  if (vC.a < .5) c = vC.rgb * (.26 * sky + .62 * dif + .42 * fill) + .08 * pow(1. - fill, 3.);
+  else if (vC.a < 1.5) c = vC.rgb * (.6 + .4 * sky) + .30 * pow(max(dot(reflect(-V, N), uLight), 0.), 16.) + .05 * sky;
+  else if (vC.a < 2.5) c = vC.rgb;
+  else c = vC.rgb * (.5 + .5 * dif);
+  o = vec4(c, 1.);
+}`;
+// Composite: the car is drawn into a small 4x multisampled target around it (so its edges are smooth without
+// multisampling the whole screen), resolved to a texture with premultiplied coverage, and laid over the frame.
+const COMP_VS = `#version 300 es
+in vec2 aQ;
+uniform vec4 uRect;       // centre and half-size, NDC
+out vec2 vUV;
+void main() { vUV = aQ * .5 + .5; gl_Position = vec4(uRect.xy + aQ * uRect.zw, 0., 1.); }`;
+const COMP_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform float uAlpha;
+in vec2 vUV;
+out vec4 o;
+void main() { o = texture(uTex, vUV) * uAlpha; }`;
+// Light and shade the car casts on the ground: a contact shadow, a warm glow, and the headlight beam. One quad in the
+// car's ground frame; uKind picks the shape.
+const DECAL_VS = `#version 300 es
+precision highp float;
+in vec2 aQ;
+uniform mat4 uVP, uM;
+out vec2 vQ;
+void main() { vQ = aQ; gl_Position = uVP * uM * vec4(aQ, 0., 1.); }`;
+const DECAL_FS = `#version 300 es
+precision highp float;
+uniform int uKind;
+uniform float uAlpha;
+in vec2 vQ;
+out vec4 o;
+void main() {
+  float r = length(vQ);
+  if (uKind == 0) { o = vec4(0., 0., 0., .62 * uAlpha * (1. - smoothstep(.35, 1., r))); return; }
+  if (uKind == 1) { float g = 1. - smoothstep(0., 1., r); o = vec4(vec3(1., .55, .35) * .20 * g * g * uAlpha, 1.); return; }
+  // Beam: vQ.x runs 0 (bumper) to 1 (far end) along the quad from -1 to 1; it spreads with distance.
+  float u = vQ.x * .5 + .5, w = .16 + .5 * u, b = (1. - smoothstep(w * .55, w, abs(vQ.y))) * pow(1. - u, 1.6) * smoothstep(0., .08, u);
+  o = vec4(vec3(1., .93, .84) * .26 * b * uAlpha, 1.);
+}`;
+// Car mesh: a few extruded profiles and boxes with flat normals.
+function buildCarMesh() {
+  const v = [];
+  const PAINT = [.94, .93, .91, 0], GLASS = [.10, .11, .12, 1], HEAD = [1, .95, .86, 2], TAIL = [1, .40, .18, 2], TYRE = [.05, .05, .055, 3];
+  const tri = (a, b, c, m, ctr) => {
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    const L = Math.hypot(...n) || 1; n = n.map(x => x / L);
+    // Face outward, away from the part's centre.
+    const mid = [(a[0] + b[0] + c[0]) / 3 - ctr[0], (a[1] + b[1] + c[1]) / 3 - ctr[1], (a[2] + b[2] + c[2]) / 3 - ctr[2]];
+    if (n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] < 0) n = n.map(x => -x);
+    for (const p of [a, b, c]) v.push(...p, ...n, ...m);
+  };
+  const quad = (a, b, c, d, m, ctr) => { tri(a, b, c, m, ctr); tri(a, c, d, m, ctr); };
+  // A profile in the x-z plane, extruded across y; each profile point may have its own half-width (a third value),
+  // which gives the cabin its tumblehome. mats(i) colours the strip after profile point i.
+  const prism = (pr, hw, mats, sideMat) => {
+    const ctr = [pr.reduce((s, p) => s + p[0], 0) / pr.length, 0, pr.reduce((s, p) => s + p[1], 0) / pr.length], W = p => p[2] ?? hw;
+    for (const sg of [-1, 1]) for (let i = 1; i + 1 < pr.length; i++) tri([pr[0][0], sg * W(pr[0]), pr[0][1]], [pr[i][0], sg * W(pr[i]), pr[i][1]], [pr[i + 1][0], sg * W(pr[i + 1]), pr[i + 1][1]], sideMat, ctr);
+    for (let i = 0; i < pr.length; i++) {
+      const a = pr[i], b = pr[(i + 1) % pr.length];
+      quad([a[0], -W(a), a[1]], [b[0], -W(b), b[1]], [b[0], W(b), b[1]], [a[0], W(a), a[1]], mats(i), ctr);
+    }
+  };
+  const box = (cx, cy, cz, hx, hy, hz, m) => prism([[cx - hx, cz - hz], [cx + hx, cz - hz], [cx + hx, cz + hz], [cx - hx, cz + hz]].map(([x, z]) => [x, z]), hy, () => m, m) || v;
+  // Tyres first (offset in y by shifting the box), then the body over them.
+  for (const x of [-1.42, 1.42]) for (const y of [-.78, .78]) {
+    const n0 = v.length; box(x, 0, .33, .34, .13, .33, TYRE);
+    for (let i = n0; i < v.length; i += 10) v[i + 1] += y;
+  }
+  // Body: a low sedan, the hood falling to the nose and a short deck at the back.
+  prism([[-2.3, .3], [2.3, .3], [2.34, .56], [2.14, .78], [1.15, .97], [-1.95, .97], [-2.3, .86]], .93, () => PAINT, PAINT);
+  // Cabin: raked windshield, narrower at the roof; dark glass all round, painted roof.
+  prism([[-1.72, .97, .82], [1.12, .97, .82], [.1, 1.41, .66], [-1.12, 1.41, .66]], .8, i => i === 2 ? PAINT : GLASS, GLASS);
+  // Lamps, a hair proud of the body.
+  const lamp = (x, y0, y1, z0, z1, m) => quad([x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1], m, [0, 0, .6]);
+  lamp(2.345, .46, .82, .42, .53, HEAD); lamp(2.345, -.82, -.46, .42, .53, HEAD);
+  lamp(-2.31, .52, .88, .66, .79, TAIL); lamp(-2.31, -.88, -.52, .66, .79, TAIL);
+  return new Float32Array(v);
+}
+const CAR_LEN = 4.6;   // model metres, nose to tail
+
 const yieldTask = () => new Promise(r => setTimeout(r, 0));
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 // Loads a data script (allowed from file://, unlike fetch) and resolves with the global it sets.
@@ -384,7 +490,9 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   /* ---------- GL ---------- */
   let gl = null, glLost = false, progT = null, progR = null, vaoT = null, vaoR = null, hBuf = null, nIdx = 0, nRIdx = 0, rIdxType = 0;
   let texA = null, texB = null, roadsOn = false;
-  const UT = {}, UR = {};
+  const UT = {}, UR = {}, UC = {}, UD = {};
+  let progC = null, progD = null, progQ = null, vaoC = null, vaoD = null, nCar = 0, carRT = null;
+  const UQ = {};
   function compile(vsSrc, fsSrc) {
     const mk = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); return sh; };
     const p = gl.createProgram(), vs = mk(gl.VERTEX_SHADER, vsSrc), fs = mk(gl.FRAGMENT_SHADER, fsSrc);
@@ -403,11 +511,12 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     stats.gl = !!gl;
     if (!gl) { const c2 = cv.cloneNode(false); cv.replaceWith(c2); cv = c2; fctx = cv.getContext('2d'); return; }
     gl.getExtension('KHR_parallel_shader_compile');
-    progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS);
+    progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); progC = compile(CAR_VS, CAR_FS); progD = compile(DECAL_VS, DECAL_FS); progQ = compile(COMP_VS, COMP_FS);
     // A GPU reset or driver switch loses the context: keep drawing the overlay, and rebuild when it returns.
     cv.addEventListener('webglcontextlost', e => { e.preventDefault(); glLost = true; });
     cv.addEventListener('webglcontextrestored', () => {
-      progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); vaoR = null; roadsOn = false; ib = null;
+      progT = compile(TERRAIN_VS, TERRAIN_FS); progR = compile(ROAD_VS, ROAD_FS); progC = compile(CAR_VS, CAR_FS); progD = compile(DECAL_VS, DECAL_FS); progQ = compile(COMP_VS, COMP_FS);
+      vaoR = null; roadsOn = false; ib = null; carRT = null;
       // Lost before the first data was in: load() sets up the new context when the data arrives.
       if (!pre) { glLost = false; return; }
       setupGL(); if (elev) { texB = makeTex(EW, EH, elev, water); uploadGridH(); } if (roads.length) buildRoads();
@@ -425,7 +534,23 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   }
   let pre = null;   // preview data, kept for a context restore
   function setupGL() {
-    linked(progT); linked(progR);
+    linked(progT); linked(progR); linked(progC); linked(progD); linked(progQ);
+    for (const n of ['uVP', 'uM', 'uLight', 'uEye']) UC[n] = gl.getUniformLocation(progC, n);
+    for (const n of ['uRect', 'uTex', 'uAlpha']) UQ[n] = gl.getUniformLocation(progQ, n);
+    for (const n of ['uVP', 'uM', 'uKind', 'uAlpha']) UD[n] = gl.getUniformLocation(progD, n);
+    {
+      const mesh = buildCarMesh(); nCar = mesh.length / 10;
+      vaoC = gl.createVertexArray(); gl.bindVertexArray(vaoC);
+      const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+      [['aP', 3, 0], ['aN', 3, 12], ['aC', 4, 24]].forEach(([n, k, off]) => { const l = gl.getAttribLocation(progC, n); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, k, gl.FLOAT, false, 40, off); });
+      vaoD = gl.createVertexArray(); gl.bindVertexArray(vaoD);
+      const q = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, q); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+      const l = gl.getAttribLocation(progD, 'aQ'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0);
+      // progQ reads the same quad; its aQ is bound to the same location.
+      gl.bindAttribLocation(progQ, l, 'aQ'); gl.linkProgram(progQ);
+      for (const n of ['uRect', 'uTex', 'uAlpha']) UQ[n] = gl.getUniformLocation(progQ, n);
+      gl.bindVertexArray(null);
+    }
     for (const n of ['uVP', 'uZk', 'uMix', 'uGW', 'uDemA', 'uDemB', 'uSize', 'uRes', 'uLens', 'uDpr', 'uFade', 'uShade', 'uEye', 'uFog', 'uLight', 'uMinorFar', 'uHaze']) UT[n] = gl.getUniformLocation(progT, n);
     for (const n of ['uVP', 'uZk', 'uMix', 'uDpr', 'uRes', 'uBox', 'uFade']) UR[n] = gl.getUniformLocation(progR, n);
     texA = makeTex(pre.w, pre.h, pre.elev, pre.water);
@@ -566,7 +691,74 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   const places = (labels || []).map(l => { const p = l.lat == null ? { ...l } : { ...l, ...(([x, y]) => ({ x, y }))(ll2px(l.lat, l.lon)) }; p.a = 0; return p; });
   let fontsOk = !document.fonts, labelsA = 0, carA = 0, carVis = 1, heading = 0, headingInit = false, lensA = 0;
   if (document.fonts) document.fonts.ready.then(() => { fontsOk = true; if (reduce && ready) draw(performance.now(), true); });
-  const carDist = t => reduce ? route.len * .3 : (t / 1000) * SPEED;
+  // The car arrives where it used to be 20 s into its drive, which puts it front and centre in the framing.
+  const D0 = SPEED * (20 - REVEAL * .62 / 1000);
+  const carDist = t => reduce ? SPEED * 20 : D0 + (t0 < 0 ? 0 : t - t0) / 1000 * SPEED;
+
+  // The car's pose on the surface, shared by the GL pass (the 3D car and the light it casts) and the overlay (its trail).
+  const CAR_PX = 26;                       // car length on screen, CSS px
+  const car = { ok: false, x: 0, y: 0, h: 0, d: 0, a: 0, Lw: 1, M: new Float32Array(16), up: [0, 0, 1], f: [1, 0, 0], l: [0, 1, 0], o: [0, 0, 0] };
+  function updateCar(t, dt) {
+    car.ok = false;
+    if (route.n < 2) return;
+    const age = t0 < 0 ? 0 : t - t0, k = reduce ? 1 : 1 - Math.exp(-dt / .25);
+    // The car arrives once the land has settled (and its roads are in), never during the tilt.
+    carA += ((roadsT >= 0 && (reduce || age > REVEAL * .62) ? 1 : 0) - carA) * (reduce ? 1 : 1 - Math.exp(-dt / .45));
+    const d = carDist(t);
+    routeAt(d, CAR);
+    const ch = gl ? meshH(CAR[0], CAR[1]) : 0;
+    carVis += ((!gl || visible(CAR[0], CAR[1], ch + 1.5) ? 1 : 0) - carVis) * k;
+    routeAt(d + 3, A); routeAt(d - 3, B);
+    const target = Math.atan2(A[1] - B[1], A[0] - B[0]);
+    if (!headingInit) { heading = target; headingInit = true; }
+    let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .06));
+    car.ok = true; car.x = CAR[0]; car.y = CAR[1]; car.h = ch; car.d = d; car.a = carA * carVis;
+    if (gl) carFrame(k);
+  }
+  // Model matrix: the car sits on the surface, pitched and rolled with the slope under it (smoothed), at a constant
+  // size on screen like a map marker.
+  function carFrame(k) {
+    const e = cam.eye, X = car.x, Y = -car.y, zAt = (x, y) => (meshH(x, y) - H0) * zk, Z = zAt(car.x, car.y);
+    const Lw = CAR_PX * 2 * Math.hypot(X - e[0], Y - e[1], Z - e[2]) * Math.tan(pose.fov / 2) / vh;
+    const hx = Math.cos(heading), hy = Math.sin(heading), fl = Lw * .5, wl = Lw * .21;
+    // Ground under the nose, tail, and both sides. World forward is (hx, -hy); world left is (hy, hx).
+    const pf = [X + hx * fl, Y - hy * fl, zAt(car.x + hx * fl, car.y + hy * fl)], pb = [X - hx * fl, Y + hy * fl, zAt(car.x - hx * fl, car.y - hy * fl)];
+    const pl = [X + hy * wl, Y + hx * wl, zAt(car.x + hy * wl, car.y - hx * wl)], pr = [X - hy * wl, Y - hx * wl, zAt(car.x - hy * wl, car.y + hx * wl)];
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], nrm = a => { const L = Math.hypot(...a) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const up = nrm(cross(nrm(sub(pf, pb)), nrm(sub(pl, pr))));
+    car.up = nrm([car.up[0] + (up[0] - car.up[0]) * k, car.up[1] + (up[1] - car.up[1]) * k, car.up[2] + (up[2] - car.up[2]) * k]);
+    const u = car.up, f0 = [hx, -hy, (pf[2] - pb[2]) / (2 * fl)], fd = f0[0] * u[0] + f0[1] * u[1] + f0[2] * u[2];
+    const f = nrm([f0[0] - u[0] * fd, f0[1] - u[1] * fd, f0[2] - u[2] * fd]), l = cross(u, f);
+    // Rest on the highest of the five ground points, so no corner sinks into the hillside.
+    const zc = Math.max(Z, (pf[2] + pb[2] + pl[2] + pr[2]) / 4) + Lw * .02;
+    const sc = Lw / CAR_LEN, M = car.M;
+    M.set([f[0] * sc, f[1] * sc, f[2] * sc, 0, l[0] * sc, l[1] * sc, l[2] * sc, 0, u[0] * sc, u[1] * sc, u[2] * sc, 0, X, Y, zc, 1]);
+    car.f = f; car.l = l; car.o = [X, Y, zc]; car.Lw = Lw;
+  }
+  // The car's own 4x multisampled render target (colour and depth) and the texture it resolves into.
+  function carTarget(size) {
+    if (carRT && carRT.size === size) return carRT;
+    if (carRT) { gl.deleteFramebuffer(carRT.ms); gl.deleteFramebuffer(carRT.rs); gl.deleteRenderbuffer(carRT.c); gl.deleteRenderbuffer(carRT.z); gl.deleteTexture(carRT.tex); }
+    const n = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0);
+    const rb = fmt => { const r = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, r); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, n, fmt, size, size); return r; };
+    const c = rb(gl.RGBA8), z = rb(gl.DEPTH_COMPONENT24), ms = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ms); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, c); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, z);
+    const tex = gl.createTexture(); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    const rs = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, rs); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return (carRT = { size, ms, rs, c, z, tex });
+  }
+  const carVP = new Float32Array(16);
+  // A quad in the car's ground frame: centre c ahead of the car, half-length a, half-width b (world units).
+  const decalM = new Float32Array(16);
+  function decal(c, a, b) {
+    const { f, l, up, o } = car;
+    decalM.set([f[0] * a, f[1] * a, f[2] * a, 0, l[0] * b, l[1] * b, l[2] * b, 0, up[0], up[1], up[2], 0, o[0] + f[0] * c, o[1] + f[1] * c, o[2] + f[2] * c, 1]);
+    return decalM;
+  }
   function drawOverlay(t, dt) {
     octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);
     octx.setTransform(dprOv, 0, 0, dprOv, 0, 0);
@@ -601,43 +793,32 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       }
     }
     octx.globalAlpha = 1;
-    // The drive: trail, then the car. Both fade in with the roads, and fade behind a ridge.
-    if (route.n > 1) {
-      // The car arrives once the land has settled (and its roads are in), never during the tilt.
-      carA += ((roadsT >= 0 && (reduce || age > REVEAL * .62) ? 1 : 0) - carA) * (reduce ? 1 : 1 - Math.exp(-dt / .45));
-      const d = carDist(t);
-      routeAt(d, CAR);
-      const ch = gl ? meshH(CAR[0], CAR[1]) : 0;
-      carVis += ((!gl || visible(CAR[0], CAR[1], ch + 1.5) ? 1 : 0) - carVis) * k;
-      const a = carA * carVis;
-      if (a > .01) {
-        // Trail: opacity follows a continuous curve along its length. Pieces are grouped only while the 8-bit alpha
-        // is unchanged, and use flat caps so neighbouring pieces never overlap into a seam.
-        octx.lineWidth = 1.8; octx.lineCap = 'butt';
-        let lvl = -1, lx = 0, ly = 0, first = true;
-        for (let q = d - TRAIL; ; q += 1) {
-          const last = q >= d; if (last) q = d;
-          routeAt(q, A); project(A[0], A[1], gl ? meshH(A[0], A[1]) + .5 : 0, S);
-          if (first) { lx = S[0]; ly = S[1]; first = false; if (!last) continue; }
-          const al = Math.round(217 * a * Math.pow(1 - (d - q) / TRAIL, 1.6));   // 217/255 = 0.85 at the car
-          if (al !== lvl) { if (lvl > 0) octx.stroke(); lvl = al; octx.beginPath(); octx.moveTo(lx, ly); octx.strokeStyle = `rgba(255,122,69,${(al / 255).toFixed(4)})`; }
-          octx.lineTo(S[0], S[1]); lx = S[0]; ly = S[1];
-          if (last) break;
-        }
-        if (lvl > 0) octx.stroke();
-        octx.lineCap = 'round';
-        routeAt(d + 3, A); routeAt(d - 3, B);
-        const target = Math.atan2(A[1] - B[1], A[0] - B[0]);
-        if (!headingInit) { heading = target; headingInit = true; }
-        let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .06));
-        const hx = Math.cos(heading), hy = Math.sin(heading);
-        project(CAR[0], CAR[1], ch + .5, S); project(CAR[0] + hx, CAR[1] + hy, ch + .5, S2); project(CAR[0] - hy, CAR[1] + hx, ch + .5, S3);
-        let fx = S2[0] - S[0], fy = S2[1] - S[1], rx = S3[0] - S[0], ry = S3[1] - S[1];
-        const s = 1 / Math.max(1e-6, Math.max(Math.hypot(fx, fy), Math.hypot(rx, ry)));
-        fx *= s; fy *= s; rx *= s; ry *= s;
-        if (S[2] > 0) drawCar(S[0], S[1], fx, fy, rx, ry, a);
-        octx.globalAlpha = 1;
+    // The drive's trail (the 3D car itself is drawn in the GL pass; the flat fallback draws a sprite here).
+    if (car.ok && car.a > .01) {
+      const a = car.a, d = car.d, end = d - (gl ? car.Lw * .46 : 0);
+      // Opacity follows a continuous curve along the trail. Pieces are grouped only while the 8-bit alpha is
+      // unchanged, and use flat caps so neighbouring pieces never overlap into a seam.
+      octx.lineWidth = 1.8; octx.lineCap = 'butt';
+      let lvl = -1, lx = 0, ly = 0, first = true;
+      for (let q = d - TRAIL; ; q += 1) {
+        const last = q >= end; if (last) q = end;
+        routeAt(q, A); project(A[0], A[1], gl ? meshH(A[0], A[1]) + .5 : 0, S);
+        if (first) { lx = S[0]; ly = S[1]; first = false; if (!last) continue; }
+        const al = Math.round(217 * a * Math.pow(1 - (d - q) / TRAIL, 1.6));   // 217/255 = 0.85 at the car
+        if (al !== lvl) { if (lvl > 0) octx.stroke(); lvl = al; octx.beginPath(); octx.moveTo(lx, ly); octx.strokeStyle = `rgba(255,122,69,${(al / 255).toFixed(4)})`; }
+        octx.lineTo(S[0], S[1]); lx = S[0]; ly = S[1];
+        if (last) break;
       }
+      if (lvl > 0) octx.stroke();
+      octx.lineCap = 'round';
+      if (!gl) {
+        const hx = Math.cos(heading), hy = Math.sin(heading);
+        project(car.x, car.y, 0, S); project(car.x + hx, car.y + hy, 0, S2); project(car.x - hy, car.y + hx, 0, S3);
+        let fx = S2[0] - S[0], fy = S2[1] - S[1], rx = S3[0] - S[0], ry = S3[1] - S[1];
+        const sc = 1 / Math.max(1e-6, Math.max(Math.hypot(fx, fy), Math.hypot(rx, ry)));
+        drawCar(S[0], S[1], fx * sc, fy * sc, rx * sc, ry * sc, a);
+      }
+      octx.globalAlpha = 1;
     }
     // Cursor ring
     if (mouse.in && lensA > .05) {
@@ -758,6 +939,45 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       gl.uniform4f(UR.uBox, roadBox[0], roadBox[1], roadBox[2], roadBox[3]);
       gl.drawElements(gl.TRIANGLES, nRIdx, rIdxType, 0);
     }
+    if (car.ok && car.a * fadeV > .005 && vaoC) {
+      const ca = car.a * fadeV, Lw = car.Lw;
+      // Light and shade on the ground first (no depth test: they lie on the surface under the car).
+      gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND);
+      gl.useProgram(progD); gl.bindVertexArray(vaoD);
+      gl.uniformMatrix4fv(UD.uVP, false, cam.VP); gl.uniform1f(UD.uAlpha, ca);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.uniform1i(UD.uKind, 1); gl.uniformMatrix4fv(UD.uM, false, decal(0, Lw * 1.5, Lw * 1.5)); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.uniform1i(UD.uKind, 2); gl.uniformMatrix4fv(UD.uM, false, decal(Lw * 1.6, Lw * 1.1, Lw * .9)); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA);
+      gl.uniform1i(UD.uKind, 0); gl.uniformMatrix4fv(UD.uM, false, decal(0, Lw * .62, Lw * .34)); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      // The car, depth-tested only against itself (so it never clips into the hillside it sits on), drawn into a
+      // small multisampled square around it, then laid over the frame with its fade.
+      const [px, py, w] = project(car.x, car.y, car.h, S);
+      if (w > 0) {
+        const size = Math.ceil(CAR_PX * 2.6 * dpr / 8) * 8, W = cv.width, H = cv.height;
+        const cx = Math.round(px * dpr), cy = Math.round(H - py * dpr);     // centre, GL device px
+        const rt = carTarget(size);
+        // Map that square of the screen onto the whole target: clip' = T * clip.
+        const sx = W / size, sy = H / size, tx = (W - 2 * cx) / size, ty = (H - 2 * cy) / size, m = cam.VP;
+        for (let c = 0; c < 4; c++) { carVP[c * 4] = m[c * 4] * sx + m[c * 4 + 3] * tx; carVP[c * 4 + 1] = m[c * 4 + 1] * sy + m[c * 4 + 3] * ty; carVP[c * 4 + 2] = m[c * 4 + 2]; carVP[c * 4 + 3] = m[c * 4 + 3]; }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.ms); gl.viewport(0, 0, size, size);
+        gl.clearColor(0, 0, 0, 0); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true); gl.disable(gl.BLEND);
+        gl.useProgram(progC); gl.bindVertexArray(vaoC);
+        gl.uniformMatrix4fv(UC.uVP, false, carVP); gl.uniformMatrix4fv(UC.uM, false, car.M);
+        { const a = pose.psi + pose.sun * DEG, el = pose.sunEl * DEG; gl.uniform3f(UC.uLight, Math.sin(a) * Math.cos(el), -Math.cos(a) * Math.cos(el), Math.sin(el)); }
+        gl.uniform3f(UC.uEye, cam.eye[0], cam.eye[1], cam.eye[2]);
+        gl.drawArrays(gl.TRIANGLES, 0, nCar);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.ms); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.rs);
+        gl.blitFramebuffer(0, 0, size, size, 0, 0, size, size, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(.043, .047, .047, 1);
+        gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.useProgram(progQ); gl.bindVertexArray(vaoD);
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, rt.tex); gl.uniform1i(UQ.uTex, 2);
+        gl.uniform4f(UQ.uRect, cx / W * 2 - 1, cy / H * 2 - 1, size / W, size / H); gl.uniform1f(UQ.uAlpha, ca);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+    }
     gl.bindVertexArray(null);
   }
   let mixT = -1;
@@ -767,9 +987,11 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     lensA += ((mouse.in ? 1 : 0) - lensA) * (reduce ? 1 : 1 - Math.exp(-dt / .23));
     if (gl) {
       updateCamera(t);
+      updateCar(t, dt);
       if (once || t - lastGl >= glEvery) { lastGl = t; if (!glLost) drawGL(t); stats.frames++; }
     } else if (fbMap) {
       fadeV = reduce ? 1 : Math.min(1, fadeV + dt / .7);
+      updateCar(t, dt);
       drawFallback(); stats.frames++;
     }
     if (once || t - lastOv > 11) { lastOv = t; drawOverlay(t, dt); }
@@ -920,6 +1142,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   });
   return { stats, cam, pose, route, sampleElev: (x, y) => sampleElev(x, y), ll2px, px2ll, pick, meshH, project: (x, y) => project(x, y, meshH(x, y), [0, 0, 0]),
     // Debug: put the camera at the resting pose (no drift, pointer or scroll), for checking the composition.
+    carScreen: () => car.ok ? project(car.x, car.y, car.h, [0, 0, 0]).slice(0, 2).map(Math.round) : null,
     rest: () => { zk = pose.ex / DEM.mpp; setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy); } };
 }
 
