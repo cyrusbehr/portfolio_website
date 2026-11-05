@@ -274,7 +274,7 @@ void main() {
   if (uKind == 1) { float g = 1. - smoothstep(0., 1., r); o = vec4(vec3(1., .55, .35) * .20 * g * g * uAlpha, 1.); return; }
   // Beam: vQ.x runs 0 (bumper) to 1 (far end) along the quad from -1 to 1; it spreads with distance.
   float u = vQ.x * .5 + .5, w = .16 + .5 * u, b = (1. - smoothstep(w * .55, w, abs(vQ.y))) * pow(1. - u, 1.6) * smoothstep(0., .08, u);
-  o = vec4(vec3(1., .93, .84) * .26 * b * uAlpha, 1.);
+  o = vec4(vec3(1., .93, .84) * .44 * b * uAlpha, 1.);
 }`;
 // Car mesh: a few extruded profiles and boxes with flat normals.
 function buildCarMesh() {
@@ -821,7 +821,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   const carS = [0, 0, 0];
   const TRAIL = 150, CAR = new Float32Array(2), A = new Float32Array(2), B = new Float32Array(2), S = [0, 0, 0], S2 = [0, 0, 0], S3 = [0, 0, 0];
   const beam = document.createElement('canvas'); beam.width = 96; beam.height = 48;
-  { const g = beam.getContext('2d'), rg = g.createRadialGradient(0, 24, 0, 0, 24, 96); rg.addColorStop(0, 'rgba(255,236,214,.34)'); rg.addColorStop(1, 'rgba(255,236,214,0)'); g.fillStyle = rg; g.beginPath(); g.moveTo(0, 18); g.lineTo(96, 0); g.lineTo(96, 48); g.lineTo(0, 30); g.closePath(); g.fill(); }
+  { const g = beam.getContext('2d'), rg = g.createRadialGradient(0, 24, 0, 0, 24, 96); rg.addColorStop(0, 'rgba(255,236,214,.52)'); rg.addColorStop(1, 'rgba(255,236,214,0)'); g.fillStyle = rg; g.beginPath(); g.moveTo(0, 18); g.lineTo(96, 0); g.lineTo(96, 48); g.lineTo(0, 30); g.closePath(); g.fill(); }
   const glow = document.createElement('canvas'); glow.width = glow.height = 64;
   { const g = glow.getContext('2d'), rg = g.createRadialGradient(32, 32, 0, 32, 32, 32); rg.addColorStop(0, 'rgba(255,140,90,.32)'); rg.addColorStop(1, 'rgba(255,140,90,0)'); g.fillStyle = rg; g.fillRect(0, 0, 64, 64); }
   const rrect = (c, x, y, w, h, r) => {
@@ -1122,7 +1122,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       gl.uniformMatrix4fv(UD.uVP, false, cam.VP); gl.uniform1f(UD.uAlpha, ca);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.uniform1i(UD.uKind, 1); gl.uniformMatrix4fv(UD.uM, false, decal(0, Lw * 1.5, Lw * 1.5)); gl.drawArrays(gl.TRIANGLES, 0, 6);
-      gl.uniform1i(UD.uKind, 2); gl.uniformMatrix4fv(UD.uM, false, decal(Lw * 1.6, Lw * 1.1, Lw * .9)); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.uniform1i(UD.uKind, 2); gl.uniformMatrix4fv(UD.uM, false, decal(Lw * 1.75, Lw * 1.25, Lw * .95)); gl.drawArrays(gl.TRIANGLES, 0, 6);
       gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform1i(UD.uKind, 0); gl.uniformMatrix4fv(UD.uM, false, decal(0, Lw * .62, Lw * .34)); gl.drawArrays(gl.TRIANGLES, 0, 6);
       // The car, depth-tested only against itself (so it never clips into the hillside it sits on), drawn into a
