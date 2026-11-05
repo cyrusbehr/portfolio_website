@@ -16,7 +16,9 @@ const PK = 4;                    // preview resolution divisor
 const GS = 2;                    // mesh vertex spacing, DEM px (33 m)
 const EXAG = 6;                  // vertical exaggeration of the relief (Austin's hills are only ~240 m tall)
 const H0 = 124;                  // reference elevation (the lowest point in the data), m
-const REVEAL = 2800;             // ms for the flat map to tilt into 3D while the relief rises
+const REVEAL = 3400;             // ms for the flat map to tilt into 3D while the relief rises
+const SWEEP = [0, 2900];         // ms: the contours fill in from the valleys up while the view rotates in
+const CAR_IN = .65;              // the car arrives this far into the reveal
 const DEG = Math.PI / 180;
 // The drive loop's outline (every 4th point of the route in the roads file), DEM px. The hero frames itself around
 // it before the roads file arrives, so the camera never re-frames mid-reveal. Regenerate if the route changes.
@@ -67,6 +69,7 @@ uniform vec3 uLight;      // toward the sun
 uniform vec2 uFog;        // fog start and end, distance from the eye
 uniform float uHaze;      // how much the distance lifts toward a faint haze, so far ridges stand out against it
 uniform vec2 uMinorFar;   // minor contours fade out between these distances
+uniform vec4 uSweep;      // the draw-in: level (m), fade-in depth (m), shimmer strength, on (0 or 1)
 in vec2 vP; in vec3 vW;
 out vec4 o;
 
@@ -141,7 +144,15 @@ void main() {
   float lit = clamp(.25 + .75 * s, .2, 1.9);
   float land = 1. - smoothstep(.3, .7, w);
   vec3 ink = vec3(.925, .918, .898), warm = vec3(1., .55, .32);
-  col = mix(col, mix(ink, warm, lens * .35), clamp(minor * (.17 * lit + .22 * lens) * land, 0., 1.));
+  // The draw-in: the index lines are there from the start, and the minor lines fill in from the valleys up as a
+  // level rises through them, each fading in with a slight shimmer that settles.
+  float sw = 1., glow = 0.;
+  if (uSweep.w > 0.) {
+    float below = uSweep.x - h;
+    sw = smoothstep(0., uSweep.y, below);
+    glow = sw * exp(-max(below - uSweep.y, 0.) / uSweep.y) * uSweep.z;
+  }
+  col = mix(col, mix(ink, warm, lens * .35), clamp(minor * sw * (.17 * lit * (1. + .7 * glow) + .22 * lens) * land, 0., 1.));
   col = mix(col, mix(ink, warm, lens * .45), clamp(major * (.36 * lit + .25 * lens) * land, 0., 1.));
 
   // Water: a flat, slightly cooler surface with a fine shoreline.
@@ -470,7 +481,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     // The reveal: a single eased move from a flatter, higher view, with the relief rising a beat behind the tilt.
     const u = reduce ? 1 : smoother(age / REVEAL), ur = reduce ? 1 : smoother((age - 250) / (REVEAL - 250));
     ex = pose.ex * ur; zk = ex / DEM.mpp;
-    let theta = lerp(pose.theta * .3, pose.theta, u), D = pose.D * lerp(1.16, 1, u), psi = pose.psi - lerp(10 * DEG, 0, u);
+    let theta = lerp(pose.theta * .3, pose.theta, u), D = pose.D * lerp(1.16, 1, u), psi = pose.psi - lerp(12 * DEG, 0, u);
     // Then a slow drift, faded in from zero so it never starts with a jolt.
     if (!reduce) {
       const da = smoother((age - REVEAL * .6) / 3000);
@@ -551,7 +562,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
       for (const n of ['uRect', 'uTex', 'uAlpha']) UQ[n] = gl.getUniformLocation(progQ, n);
       gl.bindVertexArray(null);
     }
-    for (const n of ['uVP', 'uZk', 'uMix', 'uGW', 'uDemA', 'uDemB', 'uSize', 'uRes', 'uLens', 'uDpr', 'uFade', 'uShade', 'uEye', 'uFog', 'uLight', 'uMinorFar', 'uHaze']) UT[n] = gl.getUniformLocation(progT, n);
+    for (const n of ['uVP', 'uZk', 'uMix', 'uGW', 'uDemA', 'uDemB', 'uSize', 'uRes', 'uLens', 'uDpr', 'uFade', 'uShade', 'uEye', 'uFog', 'uLight', 'uMinorFar', 'uHaze', 'uSweep']) UT[n] = gl.getUniformLocation(progT, n);
     for (const n of ['uVP', 'uZk', 'uMix', 'uDpr', 'uRes', 'uBox', 'uFade']) UR[n] = gl.getUniformLocation(progR, n);
     texA = makeTex(pre.w, pre.h, pre.elev, pre.water);
     texB = texA;
@@ -567,6 +578,34 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   // triangle strip per row with primitive restart, rows emitted south to north, nearest first for the views used
   // here, so the depth test rejects most hidden fragments before they are shaded.
   let ib = null, meshBox = null;
+  // The draw-in's elevation schedule: levels at evenly spaced fractions of what the resting view shows (by screen area,
+  // fading with the fog), so the front spends its time where there are lines to draw rather than on hidden peaks.
+  const sweep = { q: null };
+  function sweepTable() {
+    const save = { ...cam, VP: cam.VP.slice() }, zk0 = zk, P = [0, 0, 0], hist = new Float64Array(1024);
+    zk = pose.ex / DEM.mpp;
+    setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy);
+    const [i0, j0, i1, j1] = meshBox, F0 = pose.D * pose.fog0, F1 = pose.D * pose.fog1;
+    let tot = 0, top = 0;
+    for (let j = j0; j <= j1; j += 2) for (let i = i0; i <= i1; i += 2) {
+      const x = i * GS + GS / 2, y = j * GS + GS / 2, h = gA[j * GW + i], b = clamp(Math.round(h), 0, 1023);
+      top = Math.max(top, b);
+      if (pre.water[clamp(y / PK | 0, 0, pre.h - 1) * pre.w + clamp(x / PK | 0, 0, pre.w - 1)]) continue;
+      project(x, y, h, P);
+      if (P[2] <= 0 || P[0] < 0 || P[0] > vw || P[1] < 0 || P[1] > vh) continue;
+      const dist = Math.hypot(x - cam.eye[0], -y - cam.eye[1], (h - H0) * zk - cam.eye[2]);
+      const wgt = (1 - clamp((dist - F0) / (F1 - F0), 0, 1)) / (P[2] * P[2]);
+      hist[b] += wgt; tot += wgt;
+    }
+    zk = zk0; cam.VP.set(save.VP); Object.assign(cam, { ...save, VP: cam.VP });
+    if (!tot) return null;
+    // 25 levels from the lowest visible ground to the 99.5th percentile, then on past the highest peak in the data.
+    const q = []; let c = 0, v = 0;
+    for (let k = 0; k <= 24; k++) { const want = tot * (.002 + k / 24 * .993); while (v < 1023 && c + hist[v] < want) c += hist[v++]; q.push(v); }
+    q.push(Math.max(q[24], top) + 31);
+    stats.sweep = q.slice();
+    return q;
+  }
   function visibleBox() {
     const save = { ...cam, VP: cam.VP.slice() }, zk0 = zk, F = pose.D * pose.fog1;
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
@@ -595,6 +634,8 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const idx = new Uint32Array(Math.max(0, j1 - j0) * (cols * 2 + 1)); let n = 0;
     for (let j = j1 - 1; j >= j0; j--) { for (let i = i0; i <= i1; i++) { idx[n++] = j * GW + i; idx[n++] = (j + 1) * GW + i; } idx[n++] = 0xFFFFFFFF; }
     nIdx = n;
+    // The draw-in climbs through the elevations the view actually shows (fixed once, so a resize mid-reveal does not jump it).
+    if (!sweep.q) sweep.q = sweepTable();
     gl.bindVertexArray(vaoT); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW); gl.bindVertexArray(null);
     stats.mesh = { box: meshBox, tris: n };
   }
@@ -618,7 +659,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     let len = 0;
     for (let i = 0; i < n; i++) { route.x[i] = R[i * 2]; route.y[i] = R[i * 2 + 1]; if (i) len += Math.hypot(route.x[i] - route.x[i - 1], route.y[i] - route.y[i - 1]); route.cum[i] = len; }
     route.len = len;
-    buildPath();
+    buildPath(); warmTilt();
   }
   // Each polyline is cut into pieces of at most 3 DEM px, so the straight pieces follow the folds of the mesh.
   function buildRoads() {
@@ -681,6 +722,57 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const i = Math.max(1, lo), a = path.cum[i - 1], b = path.cum[i], f = b > a ? (d - a) / (b - a) : 0;
     out[0] = path.x[i - 1] + (path.x[i] - path.x[i - 1]) * f; out[1] = path.y[i - 1] + (path.y[i] - path.y[i - 1]) * f;
   };
+  // Fractional sample index on the path at distance d.
+  const pathIdx = d => {
+    d = ((d % path.len) + path.len) % path.len;
+    let lo = 0, hi = path.n - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (path.cum[m] < d) lo = m + 1; else hi = m; }
+    const i = Math.max(1, lo), a = path.cum[i - 1], b = path.cum[i];
+    return i - 1 + (b > a ? (d - a) / (b - a) : 0);
+  };
+  // The car's pitch and roll come from the ground along its path, smoothed over about a hundred metres of road: it
+  // climbs a real hill nose up, but does not rock over every fold of the mesh. Grade (along the road) and cross slope
+  // (across it) are in metres per DEM px, one pair per path sample, for the preview mesh and the full one (blended
+  // like the terrain), and rebuilt whenever either mesh or the path changes.
+  const TILT_SIG = 10, ROLL_SIG = 10, ROLL_W = 3;   // DEM px: smoothing along the road for pitch and roll; half-width across it
+  const tilt = { gA: null, gB: null, nA: 0, nB: 0, a: null, b: null };
+  function tiltFor(m) {
+    const n = path.n - 1, h = new Float64Array(n), c = new Float64Array(n), m0 = mixV;
+    mixV = m;
+    for (let i = 0; i < n; i++) {
+      const p = (i + 1) % n, q = (i - 1 + n) % n;
+      let tx = path.x[p] - path.x[q], ty = path.y[p] - path.y[q]; const L = Math.hypot(tx, ty) || 1; tx /= L; ty /= L;
+      const x = path.x[i], y = path.y[i];
+      h[i] = meshH(x, y);
+      // Left of travel in DEM px is (ty, -tx), matching carFrame.
+      c[i] = (meshH(x + ty * ROLL_W, y - tx * ROLL_W) - meshH(x - ty * ROLL_W, y + tx * ROLL_W)) / (2 * ROLL_W);
+    }
+    mixV = m0;
+    const ds = path.len / n, blur = (v, sig) => {
+      const s = sig / ds, R = Math.ceil(s * 3), w = []; let ws = 0;
+      for (let k = -R; k <= R; k++) { w.push(Math.exp(-.5 * (k / s) ** 2)); ws += w[k + R]; }
+      const o = new Float64Array(n);
+      for (let i = 0; i < n; i++) { let a = 0; for (let k = -R; k <= R; k++) a += v[(i + k + n * 4) % n] * w[k + R]; o[i] = a / ws; }
+      return o;
+    };
+    const hs = blur(h, TILT_SIG), cs = blur(c, ROLL_SIG), out = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      const p = (i + 1) % n, q = (i - 1 + n) % n;
+      out[i * 2] = (hs[p] - hs[q]) / (2 * ds); out[i * 2 + 1] = cs[i];
+    }
+    return out;
+  }
+  // Build the tables when the main thread is idle, so the car never arrives on a long frame.
+  const warmTilt = () => (window.requestIdleCallback || (f => setTimeout(f, 60)))(() => { if (path.n && gA) slopesAt(0, SL); }, { timeout: 600 });
+  function slopesAt(d, out) {
+    if (tilt.gA !== gA || tilt.nA !== path.n) { tilt.a = tiltFor(0); tilt.gA = gA; tilt.nA = path.n; }
+    if (tilt.gB !== gB || tilt.nB !== path.n) { tilt.b = gB === gA ? tilt.a : tiltFor(1); tilt.gB = gB; tilt.nB = path.n; }
+    const n = path.n - 1, fi = pathIdx(d), i = Math.floor(fi) % n, j = (i + 1) % n, f = fi - Math.floor(fi);
+    for (let k = 0; k < 2; k++) {
+      const a = tilt.a[i * 2 + k] + (tilt.a[j * 2 + k] - tilt.a[i * 2 + k]) * f, b = tilt.b[i * 2 + k] + (tilt.b[j * 2 + k] - tilt.b[i * 2 + k]) * f;
+      out[k] = a + (b - a) * mixV;
+    }
+  }
   const routeAt = (d, out) => {
     d = ((d % route.len) + route.len) % route.len;
     let lo = 0, hi = route.n - 1;
@@ -720,18 +812,23 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   let fontsOk = !document.fonts, labelsA = 0, carA = 0, carVis = 1, heading = 0, headingInit = false, lensA = 0;
   if (document.fonts) document.fonts.ready.then(() => { fontsOk = true; if (reduce && ready) draw(performance.now(), true); });
   // The car arrives where it used to be 20 s into its drive, which puts it front and centre in the framing.
-  const D0 = SPEED * (20 - REVEAL * .62 / 1000);
-  const carDist = t => reduce ? SPEED * 20 : D0 + (t0 < 0 ? 0 : t - t0) / 1000 * SPEED;
+  const D0 = SPEED * (20 - REVEAL * CAR_IN / 1000);
+  let dSeek = 0;                           // debug: jump along the loop
+  const carDist = t => dSeek + (reduce ? SPEED * 20 : D0 + (t0 < 0 ? 0 : t - t0) / 1000 * SPEED);
 
   // The car's pose on the surface, shared by the GL pass (the 3D car and the light it casts) and the overlay (its trail).
   const CAR_PX = 26;                       // car length on screen, CSS px
+  const PITCH_K = .9, PITCH_MAX = 26 * DEG, ROLL_K = .12, ROLL_MAX = 2.5 * DEG, SL = [0, 0];
+  // Pitch for a drawn slope angle: half strength on gentle rolls (so they barely register), full strength on real
+  // climbs, easing toward PITCH_MAX on the steepest.
+  const pitchOf = a => PITCH_MAX * Math.tanh(a * PITCH_K * (.45 + .55 * clamp((Math.abs(a) - 4 * DEG) / (14 * DEG), 0, 1)) / PITCH_MAX);
   const car = { ok: false, x: 0, y: 0, h: 0, d: 0, a: 0, Lw: 1, M: new Float32Array(16), up: [0, 0, 1], f: [1, 0, 0], l: [0, 1, 0], o: [0, 0, 0] };
   function updateCar(t, dt) {
     car.ok = false;
     if (route.n < 2) return;
     const age = t0 < 0 ? 0 : t - t0, k = reduce ? 1 : 1 - Math.exp(-dt / .25);
     // The car arrives once the land has settled (and its roads are in), never during the tilt.
-    carA += ((roadsT >= 0 && (reduce || age > REVEAL * .62) ? 1 : 0) - carA) * (reduce ? 1 : 1 - Math.exp(-dt / .45));
+    carA += ((roadsT >= 0 && (reduce || age > REVEAL * CAR_IN) ? 1 : 0) - carA) * (reduce ? 1 : 1 - Math.exp(-dt / .45));
     const d = carDist(t);
     pathAt(d, CAR);
     const ch = gl ? meshH(CAR[0], CAR[1]) : 0;
@@ -741,7 +838,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     if (!headingInit) { heading = target; headingInit = true; }
     let dh = target - heading; dh -= 6.2832 * Math.round(dh / 6.2832); heading += dh * (reduce ? 1 : 1 - Math.exp(-dt / .05));
     car.ok = true; car.x = CAR[0]; car.y = CAR[1]; car.h = ch; car.d = d; car.a = carA * carVis;
-    if (gl) carFrame(k);
+    if (gl && carA > .001) carFrame(k);   // nothing to place before it starts to arrive
   }
   // Model matrix: the car sits on the surface, pitched and rolled with the slope under it (smoothed), at a constant
   // size on screen like a map marker.
@@ -754,9 +851,10 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     const pl = [X + hy * wl, Y + hx * wl, zAt(car.x + hy * wl, car.y - hx * wl)], pr = [X - hy * wl, Y - hx * wl, zAt(car.x - hy * wl, car.y + hx * wl)];
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], nrm = a => { const L = Math.hypot(...a) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
     const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    // The relief is drawn six times taller than life, so the car only follows part of it: a gentle pitch on climbs
-    // and descents, and just a hint of side-to-side roll.
-    const sF = clamp((pf[2] - pb[2]) / (2 * fl) * .35, -.12, .12), sL = clamp((pl[2] - pr[2]) / (2 * wl) * .1, -.045, .045);
+    // The relief is drawn six times taller than life, so the car follows part of it: a clear nose-up on a real climb,
+    // easing toward a limit on the steepest drawn slopes, and just a hint of side-to-side roll.
+    slopesAt(car.d, SL);
+    const sF = Math.tan(pitchOf(Math.atan(SL[0] * zk))), sL = Math.tan(ROLL_MAX * Math.tanh(Math.atan(SL[1] * zk) * ROLL_K / ROLL_MAX));
     const up = nrm(cross(nrm([hx, -hy, sF]), nrm([hy, hx, sL])));
     car.up = nrm([car.up[0] + (up[0] - car.up[0]) * k, car.up[1] + (up[1] - car.up[1]) * k, car.up[2] + (up[2] - car.up[2]) * k]);
     const u = car.up, f0 = [hx, -hy, sF], fd = f0[0] * u[0] + f0[1] * u[1] + f0[2] * u[2];
@@ -796,7 +894,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     octx.lineCap = 'round'; octx.lineJoin = 'round';
     const age = t0 < 0 ? 0 : t - t0, k = reduce ? 1 : 1 - Math.exp(-dt / .25);
     // Labels arrive once the land has settled (and the web font is in, so they never swap typeface).
-    labelsA += ((fontsOk && (reduce || age > REVEAL * .75) ? 1 : 0) - labelsA) * (reduce ? 1 : 1 - Math.exp(-dt / .5));
+    labelsA += ((fontsOk && (reduce || age > REVEAL * .8) ? 1 : 0) - labelsA) * (reduce ? 1 : 1 - Math.exp(-dt / .5));
     if (car.ok) project(car.x, car.y, car.h, carS);
     if (labelsA > .01) for (const l of places) {
       project(l.x, l.y, gl ? meshH(l.x, l.y) : 0, S);
@@ -961,6 +1059,12 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
     gl.uniform2f(UT.uSize, GW * GS, GH * GS); gl.uniform2f(UT.uRes, cv.width, cv.height);
     gl.uniform4f(UT.uLens, mouse.x * dpr, (vh - mouse.y) * dpr, 170 * dpr, lensA);
     gl.uniform1f(UT.uDpr, dpr); gl.uniform1f(UT.uFade, fadeV); gl.uniform1f(UT.uShade, pose.shade / DEM.mpp);
+    // The draw-in level: starting with the valleys already drawn and easing out as the view settles.
+    const sp = reduce ? 2 : (age - SWEEP[0]) / (SWEEP[1] - SWEEP[0]), se = clamp(sp, 0, 1);
+    if (sp < 1 && sweep.q) {
+      const q = sweep.q, e = (.2 + .8 * (1 - (1 - se) * (1 - se))) * (q.length - 1), i = Math.min(q.length - 2, e | 0);
+      gl.uniform4f(UT.uSweep, lerp(q[i], q[i + 1], e - i), 30, 1 - smoother((sp - .75) / .25), 1);
+    } else gl.uniform4f(UT.uSweep, 0, 1, 0, 0);
     gl.uniform3f(UT.uEye, cam.eye[0], cam.eye[1], cam.eye[2]); gl.uniform2f(UT.uFog, cam.D * pose.fog0, cam.D * pose.fog1); gl.uniform2f(UT.uMinorFar, cam.D * pose.mf0, cam.D * pose.mf1); gl.uniform1f(UT.uHaze, pose.haze);
     // The sun sits behind the viewer's left at the resting view, so the slopes the camera sees are side-lit.
     { const a = pose.psi + pose.sun * DEG, el = pose.sunEl * DEG; gl.uniform3f(UT.uLight, Math.sin(a) * Math.cos(el), -Math.cos(a) * Math.cos(el), Math.sin(el)); }
@@ -1168,7 +1272,7 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
         pre = { w, h, elev: e, water: wa }; setGridFromPreview(pre); EW = full.w; EH = full.h; snapPeaks(); layout(); setupGL();
         ready = true; cv.classList.add('on'); stats.ready = true; if (reduce) draw(performance.now(), true); else start();
       }
-      setGridFromFull(full);
+      setGridFromFull(full); warmTilt();
       if (!glLost) { texB = makeTex(EW, EH, elev, water); gl.bindVertexArray(null); uploadGridH(); }
       if (roads.length) buildRoads();
       mixT = performance.now(); if (reduce) { mixV = 1; draw(performance.now(), true); }
@@ -1202,6 +1306,9 @@ function init({ hero, canvas, overlay, onReadout, labels, avoid = [] }) {
   return { stats, cam, pose, route, sampleElev: (x, y) => sampleElev(x, y), ll2px, px2ll, pick, meshH, project: (x, y) => project(x, y, meshH(x, y), [0, 0, 0]),
     // Debug: put the camera at the resting pose (no drift, pointer or scroll), for checking the composition.
     carState: () => ({ a: car.a, d: car.d, h: heading, up: car.up.slice(), f: car.f.slice(), l: car.l.slice() }),
+    // Debug: the car's pitch and roll (degrees) every DEM px around the loop, at the current relief.
+    tiltProfile: () => { const o = []; for (let d = 0; d < path.len; d++) { slopesAt(d, SL); o.push([d, pitchOf(Math.atan(SL[0] * zk)) / DEG, ROLL_MAX * Math.tanh(Math.atan(SL[1] * zk) * ROLL_K / ROLL_MAX) / DEG]); } return o; },
+    seekCar: d => { dSeek += d - car.d; },
     carScreen: () => car.ok ? project(car.x, car.y, car.h, [0, 0, 0]).slice(0, 2).map(Math.round) : null,
     rest: () => { zk = pose.ex / DEM.mpp; setCamera(pose.tx, pose.ty, (meshH(pose.tx, pose.ty) - H0) * zk, pose.psi, pose.theta, pose.D, pose.fov, pose.sx, pose.sy); } };
 }

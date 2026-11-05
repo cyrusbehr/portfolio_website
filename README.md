@@ -2,7 +2,7 @@
 
 Personal site of Cyrus Behroozi, Director of Engineering at Tern. A single static page with no framework and no build step.
 
-- **Hero:** real west Austin terrain drawn live on the GPU as a contoured 3D relief, with OpenStreetMap roads draped over it and a car looping on real streets. On load the flat map tilts up into 3D while the relief rises; then it drifts slowly and follows the pointer. The line under it reads out the car's position and elevation, or the point under the cursor.
+- **Hero:** real west Austin terrain drawn live on the GPU as a contoured 3D relief, with OpenStreetMap roads draped over it and a car looping on real streets. On load the flat map tilts up into 3D while the relief rises and the contours fill in from the valleys up; then it drifts slowly and follows the pointer. The line under it reads out the car's position and elevation, or the point under the cursor.
 - **Exhibit:** a live particle filter that works out where a car is using only its motion and the road map. Once it locks on, the camera glides in and follows the car. Click the map to move the car and watch it search again.
 
 ## Layout
@@ -43,6 +43,7 @@ The hero's first frame comes from the inlined preview (`assets/data/austin-dem-q
 - **Roads or the car's loop:** `python3 tools/build_roads.py --out /tmp/roads.js` (needs network access to the Overpass API), then `python3 tools/fix_route.py /tmp/roads.js site/assets/data/austin-roads.v3.js`, which replaces the interchange by Lady Bird Lake (where OpenStreetMap routing made the car U-turn twice) with a plain right turn, and refuses to write if any reversal remains. Point `ROADS.url` in `terrain.js` at the new file and paste the `LOOP_PTS` it prints (the hero frames itself on that outline before the roads arrive). Writing over an existing version would leave visitors on the cached copy for a year. The roads ship as a script (it sets `window.TerrainRoads`) so they load from `file://` too.
 - **Elevation:** if the elevation file changes, rebuild the preview with `python3 tools/build_dem_preview.py site/assets/data/austin-dem.v2.webp site/assets/data/austin-dem-q4.v2.js` and update both references.
 - **Hero camera:** the viewing angles are set per layout in `layout()` in `terrain.js`; the target shift and distance are solved per screen in `solveFraming()` so the drive loop stays clear of the copy. With `?debug`, `__terrain.pose` can be edited live and `__terrain.stats` shows the framing, mesh size, and timings.
+- **Opening and car:** `REVEAL`, `SWEEP` and `CAR_IN` at the top of `terrain.js` set the opening's timing; the contour draw-in schedules its elevations by how much of each the resting view shows (`sweepTable()`). The car's pitch and roll come from the ground along its path, smoothed over about 160 m (`TILT_SIG`) and shaped by `pitchOf()`, so it climbs real hills nose up without rocking over small folds. With `?debug`, `__terrain.seekCar(d)` jumps the car to `d` DEM px along the loop and `__terrain.tiltProfile()` lists its pitch and roll all the way round.
 
 ## Deploy
 
