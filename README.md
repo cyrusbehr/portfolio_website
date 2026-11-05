@@ -19,6 +19,7 @@ site/                     everything that ships (Netlify publishes this folder)
   assets/fonts/           self-hosted Schibsted Grotesk and IBM Plex Mono (latin subsets)
   assets/img/             portrait
 tools/build_roads.py      rebuilds the roads file and the car's loop from OpenStreetMap
+tools/fix_route.py        straightens the car's loop at the Lady Bird Lake interchange (run after build_roads.py)
 tools/build_dem_preview.py  rebuilds the quarter-resolution elevation preview from the full file
 netlify.toml              publish settings, security headers (CSP), caching
 ```
@@ -39,7 +40,7 @@ The hero's first frame comes from the inlined preview (`assets/data/austin-dem-q
 
 - **Copy:** edit `site/index.html` directly.
 - **Cached assets:** files under `assets/data`, `assets/fonts`, `assets/img`, and `og.v1.jpg` are served with a one-year immutable cache. When you change one, bump the `.v1` in its file name and in every reference to it.
-- **Roads or the car's loop:** `python3 tools/build_roads.py --out site/assets/data/austin-roads.v2.js`, then point `ROADS.url` in `terrain.js` at the new file (needs network access to the Overpass API). Writing over the `.v1` file would leave visitors on the cached copy for a year. The roads ship as a script (it sets `window.TerrainRoads`) so they load from `file://` too. If the loop itself changes, also regenerate `LOOP_PTS` in `terrain.js` (every fourth route point), which the hero uses to frame itself before the roads arrive.
+- **Roads or the car's loop:** `python3 tools/build_roads.py --out /tmp/roads.js` (needs network access to the Overpass API), then `python3 tools/fix_route.py /tmp/roads.js site/assets/data/austin-roads.v3.js`, which replaces the interchange by Lady Bird Lake (where OpenStreetMap routing made the car U-turn twice) with a plain right turn, and refuses to write if any reversal remains. Point `ROADS.url` in `terrain.js` at the new file and paste the `LOOP_PTS` it prints (the hero frames itself on that outline before the roads arrive). Writing over an existing version would leave visitors on the cached copy for a year. The roads ship as a script (it sets `window.TerrainRoads`) so they load from `file://` too.
 - **Elevation:** if the elevation file changes, rebuild the preview with `python3 tools/build_dem_preview.py site/assets/data/austin-dem.v2.webp site/assets/data/austin-dem-q4.v2.js` and update both references.
 - **Hero camera:** the viewing angles are set per layout in `layout()` in `terrain.js`; the target shift and distance are solved per screen in `solveFraming()` so the drive loop stays clear of the copy. With `?debug`, `__terrain.pose` can be edited live and `__terrain.stats` shows the framing, mesh size, and timings.
 
