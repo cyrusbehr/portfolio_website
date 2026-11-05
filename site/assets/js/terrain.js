@@ -127,7 +127,7 @@ void main() {
   // Low sun from behind the viewer's left. 's' is 1 on flat ground, higher on slopes turned to the sun.
   vec3 n = normalize(vec3(-gh.x * uShade, gh.y * uShade, 1.));
   float s = clamp(dot(n, uLight) / uLight.z, 0., 2.6);
-  vec3 col = vec3(.047, .050, .050) * (.32 + .68 * s);
+  vec3 col = vec3(.054, .057, .057) * (.30 + .74 * s);
   float dist = length(vW - uEye);
 
   // Soft spotlight around the cursor lifts the contours nearby.
@@ -141,8 +141,8 @@ void main() {
   float lit = clamp(.25 + .75 * s, .2, 1.9);
   float land = 1. - smoothstep(.3, .7, w);
   vec3 ink = vec3(.925, .918, .898), warm = vec3(1., .55, .32);
-  col = mix(col, mix(ink, warm, lens * .35), clamp(minor * (.15 * lit + .22 * lens) * land, 0., 1.));
-  col = mix(col, mix(ink, warm, lens * .45), clamp(major * (.32 * lit + .25 * lens) * land, 0., 1.));
+  col = mix(col, mix(ink, warm, lens * .35), clamp(minor * (.17 * lit + .22 * lens) * land, 0., 1.));
+  col = mix(col, mix(ink, warm, lens * .45), clamp(major * (.36 * lit + .25 * lens) * land, 0., 1.));
 
   // Water: a flat, slightly cooler surface with a fine shoreline.
   float wm = smoothstep(.3, .7, w);
@@ -157,7 +157,7 @@ void main() {
   col = mix(col, bg * (1. + uHaze), far);
   col = mix(bg, col, smoothstep(0., 80., min(edge.x, edge.y)));
   vec2 q = fc / uRes - .5;
-  col *= 1. - .30 * dot(q, q);
+  col *= 1. - .26 * dot(q, q);
   col += (hash(fc) - .5) * (1.5 / 255.);
   o = vec4(mix(bg, col, uFade), 1.);
 }`;
